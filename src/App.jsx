@@ -1,13 +1,12 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { Upload, FileText, Image, Bot, Loader, X, Zap, Edit, BookOpen, Layers, Check, AlertTriangle, Send, Settings, Award } from 'lucide-react';
 
-// CONFIGURACIÓN DE LA API DE GEMINI
-const apiKey = ""; 
+// CONFIGURACIÓN GLOBAL
 const GEMINI_MODEL = "gemini-2.5-flash-preview-09-2025";
-const API_URL = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${apiKey}`;
 
-// Variable de entorno para la clave de API (necesaria para Vercel/Vite)
-const API_KEY = import.meta.env.VITE_GEMINI_API_KEY || "";
+// Obtener la clave de API de la variable de entorno de Vercel/Vite de forma segura.
+// Si no está definida, será una cadena vacía.
+const GEMINI_API_KEY = import.meta.env.VITE_GEMINI_API_KEY || ""; 
 
 // Enumeración de vistas
 const View = {
@@ -192,7 +191,10 @@ const App = () => {
 
   const handleGeminiCall = useCallback(async (userPrompt, isCorrection = false, structuredSchema = null, maxRetries = 3) => {
     if (!file || !isFileContentReady) throw new Error('El material no está cargado.');
-    if (!API_KEY) throw new Error('API Key no configurada. Por favor, configura la variable de entorno VITE_GEMINI_API_KEY.');
+    if (!GEMINI_API_KEY) throw new Error('API Key no configurada. Por favor, configura la variable de entorno VITE_GEMINI_API_KEY en Vercel.');
+    
+    // Construir la URL de la API dentro de la función para asegurar que se usa la clave cargada.
+    const API_URL = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${GEMINI_API_KEY}`;
     
     let systemInstruction;
 
@@ -305,7 +307,7 @@ const App = () => {
             await new Promise(resolve => setTimeout(resolve, delay));
         }
     }
-  }, [saveMessage, file, isFileContentReady, fileContent, fileType, currentChallenge, userSelections, userSubmission, API_KEY]); 
+  }, [saveMessage, file, isFileContentReady, fileContent, fileType, currentChallenge, userSelections, userSubmission, GEMINI_API_KEY]); 
 
   // --- LÓGICA DE CORRECCIÓN LOCAL (Opción Múltiple) ---
 
@@ -357,8 +359,11 @@ const App = () => {
     
     if (currentChallenge.type === 'multiple') {
         // --- Corrección CLiente-Side para Opción Múltiple ---
-        if (!allMultipleChoiceAnswered) {
-             setErrorMessage("Por favor, responde todas las preguntas antes de corregir.");
+        const totalQuestions = currentChallenge.data.questions?.length || 0;
+        const answeredCount = Object.values(userSelections).filter(s => s !== null).length;
+
+        if (answeredCount < totalQuestions) {
+             setErrorMessage(`Por favor, responde las ${totalQuestions - answeredCount} preguntas restantes antes de corregir.`);
              setTimeout(() => setErrorMessage(null), 5000);
              return;
         }
@@ -390,7 +395,7 @@ const App = () => {
             setTimeout(() => setErrorMessage(null), 8000);
         }
     }
-  }, [currentChallenge, allMultipleChoiceAnswered, handleSubmitMultipleChoice, handleGeminiCall, userSubmission, saveMessage]);
+  }, [currentChallenge, handleSubmitMultipleChoice, handleGeminiCall, userSubmission, userSelections, saveMessage]);
 
 
   const generateOneStepContent = useCallback(async (actionPrompt) => {
@@ -466,9 +471,12 @@ const App = () => {
     }));
   }, [currentChallenge]);
   
-  const allMultipleChoiceAnswered = currentChallenge && currentChallenge.type === 'multiple'
-    ? Object.keys(currentChallenge.data.questions || {}).every(key => userSelections[key] !== null)
-    : false;
+  const totalMultipleChoiceAnswered = currentChallenge && currentChallenge.type === 'multiple'
+    ? Object.values(userSelections).filter(s => s !== null).length
+    : 0;
+  const totalQuestionsMC = currentChallenge && currentChallenge.type === 'multiple'
+    ? currentChallenge.data.questions?.length || 0
+    : 0;
 
 
   // --- SUB-COMPONENTES DE INTERFAZ POR VISTA ---
@@ -514,10 +522,13 @@ const App = () => {
         
         // 2A. Opción Múltiple (Interactiva)
         if (isMultipleChoice && currentChallenge.data && currentChallenge.data.questions) {
+            
             const scoreText = isCorrected 
                 ? `¡CORREGIDO! Obtuviste ${currentChallenge.score} de ${currentChallenge.total} (${currentChallenge.percentage.toFixed(0)}%)` 
-                : 'Responde todas las preguntas para corregir.';
+                : `Progreso: ${totalMultipleChoiceAnswered} de ${totalQuestionsMC} respondidas.`;
                 
+            const isAllAnswered = totalMultipleChoiceAnswered === totalQuestionsMC;
+
             return (
                 <div className="flex flex-col p-4 border-t bg-white">
                     <div className={`p-3 mb-3 rounded-lg font-bold text-center shadow-lg ${isCorrected ? (currentChallenge.percentage >= 60 ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700') : 'bg-indigo-50 text-indigo-700'}`}>
@@ -598,9 +609,9 @@ const App = () => {
                         <button
                             onClick={handleSubmitChallenge}
                             className={`mt-4 w-full px-6 py-3 rounded-xl text-white font-semibold transition duration-150 shadow-lg flex items-center justify-center ${
-                                allMultipleChoiceAnswered && !isGenerating ? 'bg-green-600 hover:bg-green-700' : 'bg-green-300 cursor-not-allowed'
+                                isAllAnswered && !isGenerating ? 'bg-green-600 hover:bg-green-700' : 'bg-green-300 cursor-not-allowed'
                             }`}
-                            disabled={!allMultipleChoiceAnswered || isGenerating}
+                            disabled={!isAllAnswered || isGenerating}
                         >
                             {isGenerating ? <Loader className="w-5 h-5 animate-spin mr-2" /> : <Send className="w-5 h-5 mr-2" />}
                             Corregir Examen Ahora
