@@ -1,10 +1,13 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { Upload, FileText, Image, Bot, Loader, X, Zap, Edit, BookOpen, Layers, Check, AlertTriangle, Send, Settings } from 'lucide-react';
+import { Upload, FileText, Image, Bot, Loader, X, Zap, Edit, BookOpen, Layers, Check, AlertTriangle, Send, Settings, Award } from 'lucide-react';
 
 // CONFIGURACIÓN DE LA API DE GEMINI
-const apiKey = import.meta.env.VITE_GEMINI_API_KEY || ""; 
+const apiKey = ""; 
 const GEMINI_MODEL = "gemini-2.5-flash-preview-09-2025";
 const API_URL = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${apiKey}`;
+
+// Variable de entorno para la clave de API (necesaria para Vercel/Vite)
+const API_KEY = import.meta.env.VITE_GEMINI_API_KEY || "";
 
 // Enumeración de vistas
 const View = {
@@ -170,7 +173,7 @@ const App = () => {
   };
   
   // --- GESTIÓN DEL HISTORIAL DE CHAT (Local) ---
-  const saveMessage = useCallback((role, text, isSubmission = false, isError = false, challengeData = null) => {
+  const saveMessage = useCallback((role, text, isSubmission = false, isError = false, correctionData = null) => {
       const message = {
           role,
           text,
@@ -178,7 +181,7 @@ const App = () => {
           isSubmission: !!isSubmission,
           isError: !!isError,
           file: file ? { name: file.name, type: fileType } : null,
-          ...(challengeData && { jsonChallenge: challengeData }) 
+          ...(correctionData && { correctionData: correctionData }) 
       };
       
       setChatHistory(prev => [...prev, message]);
@@ -189,6 +192,7 @@ const App = () => {
 
   const handleGeminiCall = useCallback(async (userPrompt, isCorrection = false, structuredSchema = null, maxRetries = 3) => {
     if (!file || !isFileContentReady) throw new Error('El material no está cargado.');
+    if (!API_KEY) throw new Error('API Key no configurada. Por favor, configura la variable de entorno VITE_GEMINI_API_KEY.');
     
     let systemInstruction;
 
@@ -196,19 +200,14 @@ const App = () => {
     let parts = [];
 
     if (isCorrection) {
-        // En corrección, el prompt es el texto de las respuestas/selecciones del usuario
-        let challengeDataText = '';
-        if (currentChallenge.type === 'multiple') {
-            challengeDataText = `Preguntas del Examen:\n${JSON.stringify(currentChallenge.data.questions)}\nRespuestas del usuario:\n${JSON.stringify(userSelections)}`;
-        } else {
-            challengeDataText = `Preguntas de Desarrollo:\n${currentChallenge.data}\nRespuestas del usuario:\n${userSubmission}`;
-        }
+        // En corrección de desarrollo, el prompt es el texto de las respuestas
+        let challengeDataText = `Preguntas de Desarrollo:\n${currentChallenge.data}\nRespuestas del usuario:\n${userSubmission}`;
         
         systemInstruction = "Actúa como un profesor experto y conciso. Proporciona una corrección detallada, una puntuación (inventada, ej: 85/100) y un feedback constructivo. Muestra las respuestas correctas o puntos clave para mejorar. Base la corrección estrictamente en el material adjunto.";
         parts.push({ text: `Por favor, evalúa y corrige las siguientes respuestas proporcionadas por el usuario, basándote en el material de estudio adjunto y el desafío original. ${challengeDataText}` });
 
     } else {
-        // En generación (Examen, Resumen, Flashcards), el prompt incluye el contexto del material
+        // En generación (Examen, Resumen, Flashcards)
         if (fileType.startsWith('image/')) {
             // Instrucción específica para imágenes
             systemInstruction = "Actúa como un tutor de estudio experto. Analiza la imagen proporcionada como material de estudio. Tu tarea es generar la solicitud del usuario (examen, resumen, flashcards, etc.) basándote ÚNICAMENTE en la información visible o el texto detectado en la imagen.";
@@ -306,9 +305,93 @@ const App = () => {
             await new Promise(resolve => setTimeout(resolve, delay));
         }
     }
-  }, [saveMessage, file, isFileContentReady, fileContent, fileType, currentChallenge, userSelections, userSubmission, numQuestions, numOptions]); 
+  }, [saveMessage, file, isFileContentReady, fileContent, fileType, currentChallenge, userSelections, userSubmission, API_KEY]); 
 
-  // --- CONTROLADORES DE FLUJO (Mismos que antes, solo llaman al GeminiCall actualizado) ---
+  // --- LÓGICA DE CORRECCIÓN LOCAL (Opción Múltiple) ---
+
+  const handleSubmitMultipleChoice = useCallback(() => {
+    if (!currentChallenge || currentChallenge.type !== 'multiple') return;
+
+    const questions = currentChallenge.data.questions;
+    let correctCount = 0;
+    const results = questions.map((q, index) => {
+        // La clave de la opción correcta está en q.correct_answer (ej: 'A')
+        const userAnswer = userSelections[index]; 
+        const isCorrect = userAnswer === q.correct_answer;
+        if (isCorrect) correctCount++;
+        return {
+            qIndex: index,
+            userAnswer: userAnswer,
+            isCorrect: isCorrect,
+            correctAnswer: q.correct_answer,
+        };
+    });
+
+    const totalQuestions = questions.length;
+    const scorePercentage = (correctCount / totalQuestions) * 100;
+
+    // Actualizar el estado del desafío para mostrar la corrección
+    setCurrentChallenge(prev => ({
+        ...prev,
+        isCorrected: true,
+        score: correctCount,
+        total: totalQuestions,
+        percentage: scorePercentage,
+        results: results,
+    }));
+
+    // Añadir mensaje de corrección al chat history (para seguimiento)
+    saveMessage("model", 
+        `¡Examen corregido! Obtuviste ${correctCount} de ${totalQuestions} (${scorePercentage.toFixed(0)}%). Revisa las preguntas para ver la retroalimentación.`, 
+        true, 
+        false,
+        { type: 'correction', score: correctCount, total: totalQuestions, percentage: scorePercentage }
+    );
+
+  }, [currentChallenge, userSelections, saveMessage]);
+
+
+  // --- CONTROLADOR GENERAL DE SUBMISIÓN ---
+  const handleSubmitChallenge = useCallback(async () => {
+    if (!currentChallenge) return;
+    
+    if (currentChallenge.type === 'multiple') {
+        // --- Corrección CLiente-Side para Opción Múltiple ---
+        if (!allMultipleChoiceAnswered) {
+             setErrorMessage("Por favor, responde todas las preguntas antes de corregir.");
+             setTimeout(() => setErrorMessage(null), 5000);
+             return;
+        }
+        handleSubmitMultipleChoice();
+        return;
+    } 
+    
+    // --- Corrección Server-Side (API) para Desarrollo/Ensayo ---
+    if (currentChallenge.type === 'development') {
+        if (!userSubmission.trim()) {
+            setErrorMessage("Por favor, escribe tus respuestas de desarrollo antes de corregir.");
+             setTimeout(() => setErrorMessage(null), 5000);
+             return;
+        }
+        
+        setIsGenerating(true);
+        try {
+            // Se llama a la API para la corrección
+            await handleGeminiCall("Solicitud de corrección de examen", true, null);
+            
+            // Marca como corregido después del éxito de la API
+            setCurrentChallenge(prev => ({ ...prev, isCorrected: true }));
+            
+        } catch (error) {
+            setErrorMessage(`Error de la API de corrección: ${error.message || "Ocurrió un error inesperado al procesar tu solicitud."}`);
+            saveMessage("model", `ERROR: La llamada a la API de corrección falló.\n\nMensaje: ${error.message || 'Error Desconocido'}`, true, true);
+        } finally {
+            setIsGenerating(false);
+            setTimeout(() => setErrorMessage(null), 8000);
+        }
+    }
+  }, [currentChallenge, allMultipleChoiceAnswered, handleSubmitMultipleChoice, handleGeminiCall, userSubmission, saveMessage]);
+
 
   const generateOneStepContent = useCallback(async (actionPrompt) => {
     setIsGenerating(true);
@@ -341,7 +424,12 @@ const App = () => {
         
         if (isMC) {
             const parsedJson = generatedContent;
-            setCurrentChallenge({ type, data: parsedJson, userPrompt: prompt });
+            setCurrentChallenge({ 
+                type, 
+                data: parsedJson, 
+                userPrompt: prompt, 
+                isCorrected: false, // Nuevo estado
+            });
 
             const initialSelections = {};
             if (parsedJson.questions) {
@@ -351,7 +439,12 @@ const App = () => {
             }
             setUserSelections(initialSelections);
         } else {
-            setCurrentChallenge({ type, data: generatedContent, userPrompt: prompt });
+            setCurrentChallenge({ 
+                type, 
+                data: generatedContent, 
+                userPrompt: prompt,
+                isCorrected: false, // Nuevo estado
+            });
         }
 
     } catch (error) {
@@ -363,32 +456,15 @@ const App = () => {
     }
   }, [handleGeminiCall, saveMessage]); 
 
-  const submitForCorrection = useCallback(async () => {
-    if (!currentChallenge) return;
-    
-    setIsGenerating(true);
-    try {
-        await handleGeminiCall("Solicitud de corrección de examen", true, null);
-        
-        setCurrentChallenge(null);
-        setUserSubmission('');
-        setUserSelections({});
-
-    } catch (error) {
-        setErrorMessage(`Error de la API: ${error.message || "Ocurrió un error inesperado al procesar tu solicitud."}`);
-        saveMessage("model", `ERROR: La llamada a la API de corrección falló.\n\nMensaje: ${error.message || 'Error Desconocido'}`, true, true);
-    } finally {
-        setIsGenerating(false);
-        setTimeout(() => setErrorMessage(null), 8000);
-    }
-  }, [handleGeminiCall, currentChallenge, saveMessage]); 
-
   const handleSelectionChange = useCallback((qIndex, optionLetter) => {
+    // Solo permitir cambios si el examen NO ha sido corregido
+    if (currentChallenge && currentChallenge.isCorrected) return;
+
     setUserSelections(prev => ({
         ...prev,
         [qIndex]: optionLetter,
     }));
-  }, []);
+  }, [currentChallenge]);
   
   const allMultipleChoiceAnswered = currentChallenge && currentChallenge.type === 'multiple'
     ? Object.keys(currentChallenge.data.questions || {}).every(key => userSelections[key] !== null)
@@ -403,6 +479,7 @@ const App = () => {
     
     // Controladores de un solo paso (Resumen, Flashcards)
     if (currentView === View.SUMMARY || currentView === View.FLASHCARDS) {
+        // ... (lógica de resumen/flashcards sin cambios)
         const isSummary = currentView === View.SUMMARY;
         const prompt = isSummary 
             ? "Proporciona un resumen conciso y completo que cubra todos los puntos clave del contenido proporcionado. Utiliza subtítulos y listas de Markdown."
@@ -433,90 +510,135 @@ const App = () => {
 
     // Paso 2: Formulario de Submisión 
     if (isChallengeActive) {
+        const isCorrected = currentChallenge.isCorrected;
         
         // 2A. Opción Múltiple (Interactiva)
-        if (currentChallenge.type === 'multiple' && currentChallenge.data && currentChallenge.data.questions) {
+        if (isMultipleChoice && currentChallenge.data && currentChallenge.data.questions) {
+            const scoreText = isCorrected 
+                ? `¡CORREGIDO! Obtuviste ${currentChallenge.score} de ${currentChallenge.total} (${currentChallenge.percentage.toFixed(0)}%)` 
+                : 'Responde todas las preguntas para corregir.';
+                
             return (
                 <div className="flex flex-col p-4 border-t bg-white">
-                    <h3 className="text-lg font-semibold mb-3 text-indigo-700 flex items-center">
-                        <Settings className="w-5 h-5 mr-2" /> {currentChallenge.data.title || 'Examen de Opción Múltiple'}
-                    </h3>
-                    
+                    <div className={`p-3 mb-3 rounded-lg font-bold text-center shadow-lg ${isCorrected ? (currentChallenge.percentage >= 60 ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700') : 'bg-indigo-50 text-indigo-700'}`}>
+                        <Award className="inline w-5 h-5 mr-2"/> {scoreText}
+                    </div>
+
                     {/* Contenedor de preguntas con scroll */}
                     <div className="flex-1 overflow-y-auto max-h-[300px] sm:max-h-[400px] pr-2 space-y-6 border p-3 rounded-lg bg-gray-50 shadow-inner">
-                        {currentChallenge.data.questions.map((q, qIndex) => (
-                            <div key={qIndex} className="p-3 border-b border-gray-200 last:border-b-0">
-                                <p className="font-bold mb-2 text-gray-800">P{qIndex + 1}: {q.question}</p>
-                                <div className="space-y-1">
-                                    {/* Mapear Opciones */}
-                                    {q.options.map((option, oIndex) => {
-                                        const optionMatch = option.trim().match(/^([A-Z])[\.\)]?\s/i);
-                                        const optionLetter = optionMatch ? optionMatch[1].toUpperCase() : String.fromCharCode(65 + oIndex); 
-                                        
-                                        const isSelected = userSelections[qIndex] === optionLetter;
+                        {currentChallenge.data.questions.map((q, qIndex) => {
+                            // Obtener resultados de corrección (si existe)
+                            const result = isCorrected ? currentChallenge.results.find(r => r.qIndex === qIndex) : null;
+                            
+                            return (
+                                <div key={qIndex} className="p-3 border-b border-gray-200 last:border-b-0">
+                                    <p className="font-bold mb-2 text-gray-800">P{qIndex + 1}: {q.question}</p>
+                                    <div className="space-y-1">
+                                        {/* Mapear Opciones */}
+                                        {q.options.map((option, oIndex) => {
+                                            const optionMatch = option.trim().match(/^([A-Z])[\.\)]?\s/i);
+                                            const optionLetter = optionMatch ? optionMatch[1].toUpperCase() : String.fromCharCode(65 + oIndex); 
+                                            
+                                            const isSelected = userSelections[qIndex] === optionLetter;
+                                            const isCorrectOption = optionLetter === q.correct_answer;
+                                            
+                                            // --- CLASES DE ESTILO DE CORRECCIÓN ---
+                                            let optionClass = 'hover:bg-indigo-50'; // Default
+                                            if (isCorrected) {
+                                                if (isCorrectOption) {
+                                                    // Es la respuesta correcta
+                                                    optionClass = 'bg-green-200 border border-green-500 font-semibold';
+                                                } else if (isSelected && !isCorrectOption) {
+                                                    // Respuesta del usuario es INCORRECTA
+                                                    optionClass = 'bg-red-200 border border-red-500 font-semibold';
+                                                } else {
+                                                    // Opción no seleccionada e incorrecta
+                                                    optionClass = 'bg-gray-100'; 
+                                                }
+                                            } else {
+                                                // Sin corregir: solo maneja la selección
+                                                optionClass = isSelected ? 'bg-indigo-100 border border-indigo-400' : 'hover:bg-indigo-50';
+                                            }
 
-                                        return (
-                                            <div 
-                                                key={oIndex} 
-                                                className={`flex items-center p-2 rounded-md transition duration-100 cursor-pointer ${isSelected ? 'bg-indigo-100 border border-indigo-400' : 'hover:bg-indigo-50'}`}
-                                                onClick={() => handleSelectionChange(qIndex, optionLetter)}
-                                            >
-                                                <input
-                                                    type="radio"
-                                                    id={`q${qIndex}-o${oIndex}`}
-                                                    name={`question-${qIndex}`}
-                                                    checked={isSelected}
-                                                    onChange={() => handleSelectionChange(qIndex, optionLetter)}
-                                                    className="form-radio h-4 w-4 text-indigo-600 transition duration-150 ease-in-out"
-                                                    disabled={isGenerating}
-                                                />
-                                                <label htmlFor={`q${qIndex}-o${oIndex}`} className="ml-3 text-sm font-medium text-gray-700 flex-1">
-                                                    {option}
-                                                </label>
-                                            </div>
-                                        );
-                                    })}
+
+                                            return (
+                                                <div 
+                                                    key={oIndex} 
+                                                    className={`flex items-center p-2 rounded-md transition duration-100 ${isCorrected ? 'cursor-default' : 'cursor-pointer'} ${optionClass}`}
+                                                    onClick={() => !isCorrected && handleSelectionChange(qIndex, optionLetter)}
+                                                >
+                                                    {/* Icono de feedback */}
+                                                    <div className="w-4 h-4 mr-2 flex items-center justify-center">
+                                                        {isCorrected && isCorrectOption && <Check className="w-4 h-4 text-green-700" />}
+                                                        {isCorrected && isSelected && !isCorrectOption && <X className="w-4 h-4 text-red-700" />}
+                                                    </div>
+                                                    
+                                                    <input
+                                                        type="radio"
+                                                        id={`q${qIndex}-o${oIndex}`}
+                                                        name={`question-${qIndex}`}
+                                                        checked={isSelected}
+                                                        onChange={() => !isCorrected && handleSelectionChange(qIndex, optionLetter)}
+                                                        className="form-radio h-4 w-4 text-indigo-600 transition duration-150 ease-in-out hidden" // Ocultar el radio nativo
+                                                        disabled={isGenerating || isCorrected}
+                                                    />
+                                                    <label htmlFor={`q${qIndex}-o${oIndex}`} className="ml-3 text-sm font-medium text-gray-700 flex-1">
+                                                        {option}
+                                                    </label>
+                                                </div>
+                                            );
+                                        })}
+                                    </div>
                                 </div>
-                            </div>
-                        ))}
+                            );
+                        })}
                     </div>
                     
-                    <button
-                        onClick={submitForCorrection}
-                        className={`mt-4 w-full px-6 py-3 rounded-xl text-white font-semibold transition duration-150 shadow-lg flex items-center justify-center ${
-                            allMultipleChoiceAnswered && !isGenerating ? 'bg-green-600 hover:bg-green-700' : 'bg-green-300 cursor-not-allowed'
-                        }`}
-                        disabled={!allMultipleChoiceAnswered || isGenerating}
-                    >
-                        {isGenerating ? <Loader className="w-5 h-5 animate-spin mr-2" /> : <Send className="w-5 h-5 mr-2" />}
-                        Enviar Respuestas y Corregir
-                    </button>
+                    {!isCorrected && (
+                        <button
+                            onClick={handleSubmitChallenge}
+                            className={`mt-4 w-full px-6 py-3 rounded-xl text-white font-semibold transition duration-150 shadow-lg flex items-center justify-center ${
+                                allMultipleChoiceAnswered && !isGenerating ? 'bg-green-600 hover:bg-green-700' : 'bg-green-300 cursor-not-allowed'
+                            }`}
+                            disabled={!allMultipleChoiceAnswered || isGenerating}
+                        >
+                            {isGenerating ? <Loader className="w-5 h-5 animate-spin mr-2" /> : <Send className="w-5 h-5 mr-2" />}
+                            Corregir Examen Ahora
+                        </button>
+                    )}
                 </div>
             );
         }
         
         // 2B. Desarrollo (Caja de texto)
-        if (currentChallenge.type === 'development') {
+        if (currentView === View.EXAM_DEVELOPMENT) {
             return (
                 <div className="p-4 border-t bg-gray-50 flex flex-col space-y-3">
                     <h3 className="text-lg font-semibold text-gray-700">Tus Respuestas al Examen de Desarrollo:</h3>
+                    {isCorrected && (
+                        <div className="p-3 bg-indigo-100 text-indigo-700 rounded-lg text-sm font-medium">
+                            La corrección del profesor (IA) se ha añadido a la conversación de abajo.
+                        </div>
+                    )}
                     <textarea
                         className="w-full p-3 border border-gray-300 rounded-lg shadow-inner focus:ring-indigo-500 focus:border-indigo-500 text-sm resize-y min-h-32"
                         placeholder="Escribe aquí tus respuestas completas al examen de desarrollo..."
                         value={userSubmission}
                         onChange={(e) => setUserSubmission(e.target.value)}
-                        disabled={isGenerating}
+                        disabled={isGenerating || isCorrected}
                     />
-                    <button
-                        onClick={submitForCorrection}
-                        className={`w-full px-6 py-3 rounded-xl text-white font-semibold transition duration-150 shadow-lg flex items-center justify-center ${
-                            userSubmission.trim() && !isGenerating ? 'bg-green-600 hover:bg-green-700' : 'bg-green-300 cursor-not-allowed'
-                        }`}
-                        disabled={!userSubmission.trim() || isGenerating}
-                    >
-                        {isGenerating ? <Loader className="w-5 h-5 animate-spin mr-2" /> : <Send className="w-5 h-5 mr-2" />}
-                        Enviar para Corrección
-                    </button>
+                    {!isCorrected && (
+                        <button
+                            onClick={handleSubmitChallenge}
+                            className={`w-full px-6 py-3 rounded-xl text-white font-semibold transition duration-150 shadow-lg flex items-center justify-center ${
+                                userSubmission.trim() && !isGenerating ? 'bg-green-600 hover:bg-green-700' : 'bg-green-300 cursor-not-allowed'
+                            }`}
+                            disabled={!userSubmission.trim() || isGenerating}
+                        >
+                            {isGenerating ? <Loader className="w-5 h-5 animate-spin mr-2" /> : <Send className="w-5 h-5 mr-2" />}
+                            Enviar para Corrección (IA)
+                        </button>
+                    )}
                 </div>
             );
         }
@@ -700,7 +822,7 @@ const App = () => {
           <TabButton label="Flashcards" view={View.FLASHCARDS} icon={Layers}/>
           <div className="ml-auto flex items-center text-xs text-gray-500 px-2 sm:px-4 py-2">
               <Bot className="w-3 h-3 mr-1 text-indigo-400" />
-              Tutor Multi-Formato (Local)
+              Tutor Multi-Formato
           </div>
         </div>
         
@@ -713,7 +835,7 @@ const App = () => {
             <div className="text-center text-gray-500 py-10">
               <Bot className="w-10 h-10 mx-auto mb-2 text-indigo-400" />
               <p>Sube tu material (.txt, .jpg, o .png) y haz clic en la opción deseada para generar tu contenido de estudio.</p>
-              <p className="text-xs mt-4">Nota: Esta versión usa la visión de Gemini para analizar imágenes y generar contenido a partir de ellas.</p>
+              <p className="text-xs mt-4">Nota: Esta versión usa la visión de Gemini para analizar imágenes y tiene corrección instantánea en tests múltiples.</p>
             </div>
           ) : (
             chatHistory.map((msg, index) => (
@@ -729,8 +851,12 @@ const App = () => {
                       Material: {msg.file.name}
                     </p>
                   )}
+                  {msg.correctionData && msg.correctionData.type === 'correction' && (
+                       <p className={`font-semibold text-xs mb-1 ${msg.role === 'user' ? 'text-indigo-200' : 'text-green-700'}`}>
+                          Resultado: {msg.correctionData.score} de {msg.correctionData.total} ({msg.correctionData.percentage.toFixed(0)}%)
+                       </p>
+                  )}
                   <p className="whitespace-pre-wrap text-sm">
-                    {/* Renderiza el texto del mensaje */}
                     {msg.text}
                   </p>
                 </div>
@@ -750,7 +876,7 @@ const App = () => {
           {currentChallenge && (
              <div className="flex justify-center w-full py-4">
                 <p className="px-4 py-2 bg-yellow-100 text-yellow-800 border border-yellow-300 rounded-lg text-sm font-medium animate-pulse text-center">
-                    ¡{currentChallenge.type === 'multiple' ? 'Selecciona tus respuestas' : 'Escribe tus respuestas'} y pulsa "Enviar para Corrección".
+                    ¡{currentChallenge.type === 'multiple' ? 'Selecciona tus respuestas' : 'Escribe tus respuestas'} y pulsa "Enviar".
                 </p>
              </div>
           )}
