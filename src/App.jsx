@@ -1,8 +1,7 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { Upload, FileText, Bot, Loader, X, Zap, Edit, BookOpen, Layers, Check, AlertTriangle, Send, Settings } from 'lucide-react';
+import { Upload, FileText, Image, Bot, Loader, X, Zap, Edit, BookOpen, Layers, Check, AlertTriangle, Send, Settings } from 'lucide-react';
 
 // CONFIGURACIÓN DE LA API DE GEMINI
-// La clave se deja vacía. El entorno de ejecución (Canvas) debe inyectarla en la llamada fetch.
 const apiKey = ""; 
 const GEMINI_MODEL = "gemini-2.5-flash-preview-09-2025";
 const API_URL = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${apiKey}`;
@@ -15,7 +14,7 @@ const View = {
   FLASHCARDS: 'FLASHCARDS',
 };
 
-// Esquema JSON para asegurar que el examen de opción múltiple tenga un formato consistente
+// Esquema JSON para examen de opción múltiple
 const MULTIPLE_CHOICE_SCHEMA = {
     type: "OBJECT",
     properties: {
@@ -46,6 +45,16 @@ const MULTIPLE_CHOICE_SCHEMA = {
     required: ["title", "questions"]
 };
 
+// --- FUNCIÓN DE UTILIDAD: Conversión de Imagen a Base64 ---
+const getBase64Image = (file) => {
+    return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.readAsDataURL(file);
+        reader.onload = () => resolve(reader.result.split(',')[1]); // Solo queremos la parte base64
+        reader.onerror = error => reject(error);
+    });
+};
+
 // --- COMPONENTE PRINCIPAL ---
 const App = () => {
   // --- ESTADO DE LA APLICACIÓN ---
@@ -54,7 +63,8 @@ const App = () => {
   
   // Estados del archivo cargado
   const [file, setFile] = useState(null);
-  const [fileContent, setFileContent] = useState(''); 
+  const [fileContent, setFileContent] = useState(''); // Contenido de texto O base64 de la imagen
+  const [fileType, setFileType] = useState(null); // 'text/plain', 'image/jpeg', 'image/png'
   const [isFileContentReady, setIsFileContentReady] = useState(false);
   const [isGenerating, setIsGenerating] = useState(false);
   
@@ -92,6 +102,7 @@ const App = () => {
     setErrorMessage(null);
     setFile(null);
     setFileContent('');
+    setFileType(null);
     setIsFileContentReady(false);
     setCurrentChallenge(null); 
     setUserSubmission('');
@@ -99,32 +110,55 @@ const App = () => {
     
     if (!selectedFile) return;
 
-    const MAX_FILE_SIZE = 5 * 1024 * 1024; 
+    const MAX_FILE_SIZE = 5 * 1024 * 1024; // 5MB
     if (selectedFile.size > MAX_FILE_SIZE) {
         setErrorMessage("El archivo es demasiado grande. Máximo 5MB.");
         return;
     }
+    
+    const mimeType = selectedFile.type;
+    const isImage = mimeType.startsWith('image/');
 
     setFile(selectedFile);
-    
+    setFileType(mimeType);
+
     const reader = new FileReader();
     
-    reader.onload = (e) => {
-        setFileContent(e.target.result);
-        setIsFileContentReady(true); 
+    reader.onload = async (e) => {
+        try {
+            if (isImage) {
+                // Para imágenes, convertimos a Base64 para la API
+                const base64Data = await getBase64Image(selectedFile);
+                setFileContent(base64Data);
+            } else {
+                // Para texto, usamos el contenido directo
+                setFileContent(e.target.result);
+            }
+            setIsFileContentReady(true);
+        } catch (error) {
+            setErrorMessage(`Error al procesar el archivo: ${error.message}`);
+            setFile(null);
+            setFileContent('');
+        }
     };
     
     reader.onerror = () => {
       setErrorMessage("Error de lectura del archivo. Asegúrate de que no esté corrupto.");
       setFile(null);
+      setFileContent('');
     };
 
-    reader.readAsText(selectedFile);
+    if (isImage) {
+        reader.readAsDataURL(selectedFile); // Necesitamos DataURL para getBase64Image
+    } else {
+        reader.readAsText(selectedFile);
+    }
   };
 
   const clearFile = () => {
     setFile(null);
     setFileContent('');
+    setFileType(null);
     setErrorMessage(null); 
     setIsFileContentReady(false);
     setCurrentChallenge(null);
@@ -143,12 +177,12 @@ const App = () => {
           timestamp: Date.now(),
           isSubmission: !!isSubmission,
           isError: !!isError,
-          file: file ? { name: file.name, type: file.type } : null,
+          file: file ? { name: file.name, type: fileType } : null,
           ...(challengeData && { jsonChallenge: challengeData }) 
       };
       
       setChatHistory(prev => [...prev, message]);
-  }, [file]);
+  }, [file, fileType]);
 
 
   // --- LÓGICA DE LLAMADA A GEMINI (Con Backoff) ---
@@ -156,13 +190,13 @@ const App = () => {
   const handleGeminiCall = useCallback(async (userPrompt, isCorrection = false, structuredSchema = null, maxRetries = 3) => {
     if (!file || !isFileContentReady) throw new Error('El material no está cargado.');
     
-    let fullPrompt;
     let systemInstruction;
 
     // 1. Construir el prompt para la IA
-    const materialContext = `\n\n--- MATERIAL DE ESTUDIO ---\n${fileContent}\n\n-------------------------------\n\n`;
+    let parts = [];
 
     if (isCorrection) {
+        // En corrección, el prompt es el texto de las respuestas/selecciones del usuario
         let challengeDataText = '';
         if (currentChallenge.type === 'multiple') {
             challengeDataText = `Preguntas del Examen:\n${JSON.stringify(currentChallenge.data.questions)}\nRespuestas del usuario:\n${JSON.stringify(userSelections)}`;
@@ -170,20 +204,34 @@ const App = () => {
             challengeDataText = `Preguntas de Desarrollo:\n${currentChallenge.data}\nRespuestas del usuario:\n${userSubmission}`;
         }
         
-        systemInstruction = "Actúa como un profesor experto y conciso. Proporciona una corrección detallada, una puntuación (inventada, ej: 85/100) y un feedback constructivo. Muestra las respuestas correctas o puntos clave para mejorar.";
-        fullPrompt = `Por favor, evalúa y corrige las siguientes respuestas proporcionadas por el usuario, basándote en el material de estudio adjunto y el desafío original. ${challengeDataText}`;
-        
-    } else if (structuredSchema) { // Examen Múltiple
-        systemInstruction = `Actúa como un generador de exámenes. Crea un examen de opción múltiple estrictamente a partir del material de estudio. Asegúrate de que las opciones estén etiquetadas como A, B, C, D, etc., y que las preguntas y respuestas sean concisas. DEVUELVE ÚNICAMENTE el JSON solicitado.`;
-        fullPrompt = `Genera un examen de opción múltiple con ${numQuestions} preguntas y ${numOptions} opciones por pregunta sobre el siguiente material de estudio.`;
-        
-    } else { // Resumen, Desarrollo, Flashcards (Texto libre)
-        systemInstruction = "Actúa como un tutor de estudio experto. Proporciona una respuesta detallada y bien organizada basándote estrictamente en el material de estudio. Usa Markdown para formatear la respuesta. No necesitas devolver código o JSON.";
-        fullPrompt = `${userPrompt}\n\nContenido: ${materialContext}`;
+        systemInstruction = "Actúa como un profesor experto y conciso. Proporciona una corrección detallada, una puntuación (inventada, ej: 85/100) y un feedback constructivo. Muestra las respuestas correctas o puntos clave para mejorar. Base la corrección estrictamente en el material adjunto.";
+        parts.push({ text: `Por favor, evalúa y corrige las siguientes respuestas proporcionadas por el usuario, basándote en el material de estudio adjunto y el desafío original. ${challengeDataText}` });
+
+    } else {
+        // En generación (Examen, Resumen, Flashcards), el prompt incluye el contexto del material
+        if (fileType.startsWith('image/')) {
+            // Instrucción específica para imágenes
+            systemInstruction = "Actúa como un tutor de estudio experto. Analiza la imagen proporcionada como material de estudio. Tu tarea es generar la solicitud del usuario (examen, resumen, flashcards, etc.) basándote ÚNICAMENTE en la información visible o el texto detectado en la imagen.";
+            parts.push({ text: userPrompt });
+            parts.push({
+                inlineData: {
+                    mimeType: fileType,
+                    data: fileContent
+                }
+            });
+        } else {
+            // Instrucción para texto plano
+            systemInstruction = structuredSchema 
+                ? "Actúa como un generador de exámenes. Crea un examen de opción múltiple estrictamente a partir del material de estudio. DEVUELVE ÚNICAMENTE el JSON solicitado."
+                : "Actúa como un tutor de estudio experto. Proporciona una respuesta detallada y bien organizada basándote estrictamente en el material de estudio. Usa Markdown para formatear la respuesta.";
+                
+            const materialContext = `\n\n--- MATERIAL DE ESTUDIO ---\n${fileContent}\n\n-------------------------------\n\n`;
+            parts.push({ text: `${userPrompt}\n\nContenido: ${materialContext}` });
+        }
     }
     
     const payload = {
-        contents: [{ parts: [{ text: fullPrompt }] }],
+        contents: [{ parts: parts }],
         systemInstruction: { parts: [{ text: systemInstruction }] },
     };
 
@@ -258,9 +306,9 @@ const App = () => {
             await new Promise(resolve => setTimeout(resolve, delay));
         }
     }
-  }, [saveMessage, file, isFileContentReady, fileContent, currentChallenge, userSelections, userSubmission, numQuestions, numOptions]); 
+  }, [saveMessage, file, isFileContentReady, fileContent, fileType, currentChallenge, userSelections, userSubmission, numQuestions, numOptions]); 
 
-  // --- CONTROLADORES DE FLUJO ---
+  // --- CONTROLADORES DE FLUJO (Mismos que antes, solo llaman al GeminiCall actualizado) ---
 
   const generateOneStepContent = useCallback(async (actionPrompt) => {
     setIsGenerating(true);
@@ -350,7 +398,6 @@ const App = () => {
   // --- SUB-COMPONENTES DE INTERFAZ POR VISTA ---
 
   const renderInputControls = () => {
-    // La aplicación siempre se considera "lista" ya que no hay proceso de autenticación.
     const isReadyForAction = isFileContentReady && !isGenerating; 
     const isChallengeActive = currentChallenge !== null;
     
@@ -381,7 +428,7 @@ const App = () => {
     
     const isMultipleChoice = currentView === View.EXAM_MULTIPLE;
     const actionPrompt = isMultipleChoice
-        ? `Genera un examen de opción múltiple con ${numQuestions} preguntas y ${numOptions} opciones.`
+        ? `Genera un examen de opción múltiple con ${numQuestions} preguntas y ${numOptions} opciones, basado en el material.`
         : `Genera 3 preguntas de desarrollo o ensayo abiertas y desafiantes basadas en el material, adecuadas para un nivel ${studentLevel}.`; 
 
     // Paso 2: Formulario de Submisión 
@@ -569,6 +616,10 @@ const App = () => {
   
   const FileUploadControl = () => {
     
+    const fileExtension = file ? file.name.split('.').pop().toLowerCase() : '';
+    const isText = fileExtension === 'txt';
+    const FileIcon = file ? (isText ? FileText : Image) : Upload;
+
     return (
       <div className="p-4 border-t border-b bg-white flex flex-col sm:flex-row items-center justify-between shadow-md space-y-2 sm:space-y-0">
         
@@ -584,6 +635,7 @@ const App = () => {
             <div className="flex items-center space-x-3 w-full">
               <Check className="w-5 h-5 text-green-500 flex-shrink-0" />
               <span className="text-sm font-medium text-gray-700 truncate min-w-0 flex-1">
+                <FileIcon className="inline w-4 h-4 mr-1 text-indigo-500" />
                 {file.name} 
                 {!isFileContentReady && (
                   <span className="ml-2 text-yellow-600 flex items-center">
@@ -599,7 +651,7 @@ const App = () => {
             <div className="text-sm text-gray-500 w-full">
               {isGenerating 
                   ? "Generando contenido, espera un momento..." 
-                  : "Paso 1: Sube tu material de estudio (.txt)" 
+                  : "Paso 1: Sube tu material de estudio (.txt, .jpg, .png)" 
               }
             </div>
           )}
@@ -621,7 +673,7 @@ const App = () => {
         
         <input
           type="file"
-          accept=".txt" 
+          accept=".txt,image/jpeg,image/png" 
           onChange={handleFileChange}
           className="hidden"
           ref={fileInputRef}
@@ -648,7 +700,7 @@ const App = () => {
           <TabButton label="Flashcards" view={View.FLASHCARDS} icon={Layers}/>
           <div className="ml-auto flex items-center text-xs text-gray-500 px-2 sm:px-4 py-2">
               <Bot className="w-3 h-3 mr-1 text-indigo-400" />
-              Tutor Básico (Local)
+              Tutor Multi-Formato (Local)
           </div>
         </div>
         
@@ -660,8 +712,8 @@ const App = () => {
           {chatHistory.length === 0 ? (
             <div className="text-center text-gray-500 py-10">
               <Bot className="w-10 h-10 mx-auto mb-2 text-indigo-400" />
-              <p>Sube tu material y luego haz clic en el botón de acción para generar contenido con la IA.</p>
-              <p className="text-xs mt-4">Nota: Esta es una versión simplificada, el historial no se guarda en línea.</p>
+              <p>Sube tu material (.txt, .jpg, o .png) y haz clic en la opción deseada para generar tu contenido de estudio.</p>
+              <p className="text-xs mt-4">Nota: Esta versión usa la visión de Gemini para analizar imágenes y generar contenido a partir de ellas.</p>
             </div>
           ) : (
             chatHistory.map((msg, index) => (
@@ -673,7 +725,7 @@ const App = () => {
                 }`}>
                   {msg.file && (
                     <p className={`font-semibold text-xs mb-1 ${msg.role === 'user' ? 'text-indigo-200' : 'text-gray-500'}`}>
-                      <FileText className="inline w-3 h-3 mr-1"/> 
+                      {msg.file.type.startsWith('image/') ? <Image className="inline w-3 h-3 mr-1"/> : <FileText className="inline w-3 h-3 mr-1"/>} 
                       Material: {msg.file.name}
                     </p>
                   )}
