@@ -1,11 +1,8 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { Upload, FileText, Image, Bot, Loader, X, Zap, Edit, BookOpen, Layers, Check, AlertTriangle, Send, Settings, Award } from 'lucide-react';
+import { Upload, FileText, Image, Bot, Loader, X, Zap, Edit, BookOpen, Layers, Check, AlertTriangle, Send, Settings, Award, MessageSquare } from 'lucide-react';
 
 // CONFIGURACIÓN GLOBAL
 const GEMINI_MODEL = "gemini-2.5-flash-preview-09-2025";
-
-// Obtener la clave de API de la variable de entorno de Vercel/Vite de forma segura.
-// Si no está definida, será una cadena vacía.
 const GEMINI_API_KEY = import.meta.env.VITE_GEMINI_API_KEY || ""; 
 
 // Enumeración de vistas
@@ -52,26 +49,64 @@ const getBase64Image = (file) => {
     return new Promise((resolve, reject) => {
         const reader = new FileReader();
         reader.readAsDataURL(file);
-        reader.onload = () => resolve(reader.result.split(',')[1]); // Solo queremos la parte base64
+        reader.onload = () => resolve(reader.result.split(',')[1]); 
         reader.onerror = error => reject(error);
     });
 };
+
+// --- COMPONENTE: Toast (Notificaciones) ---
+const Toast = ({ message, type, onClose }) => {
+    if (!message) return null;
+
+    const baseClasses = "fixed bottom-5 left-1/2 transform -translate-x-1/2 p-4 rounded-xl shadow-2xl transition-all duration-300 z-50 flex items-center space-x-2 animate-bounce-in";
+    let styleClasses = "";
+    let Icon = MessageSquare;
+
+    switch (type) {
+        case 'error':
+            styleClasses = "bg-red-600 text-white";
+            Icon = AlertTriangle;
+            break;
+        case 'success':
+            styleClasses = "bg-green-600 text-white";
+            Icon = Check;
+            break;
+        case 'warning':
+        default:
+            styleClasses = "bg-yellow-500 text-white";
+            Icon = AlertTriangle;
+            break;
+    }
+
+    return (
+        <div className={`${baseClasses} ${styleClasses}`} role="alert">
+            <Icon className="w-5 h-5" />
+            <span className="text-sm font-medium">{message}</span>
+            <button onClick={onClose} className="ml-3 text-white/80 hover:text-white transition">
+                <X className="w-4 h-4" />
+            </button>
+        </div>
+    );
+};
+
 
 // --- COMPONENTE PRINCIPAL ---
 const App = () => {
   // --- ESTADO DE LA APLICACIÓN ---
   const [currentView, setCurrentView] = useState(View.EXAM_MULTIPLE);
-  const [errorMessage, setErrorMessage] = useState(null); 
+  
+  // Estado del Toast
+  const [toast, setToast] = useState({ message: null, type: 'warning' }); 
   
   // Estados del archivo cargado
   const [file, setFile] = useState(null);
-  const [fileContent, setFileContent] = useState(''); // Contenido de texto O base64 de la imagen
-  const [fileType, setFileType] = useState(null); // 'text/plain', 'image/jpeg', 'image/png'
+  const [fileContent, setFileContent] = useState(''); 
+  const [fileType, setFileType] = useState(null); 
   const [isFileContentReady, setIsFileContentReady] = useState(false);
   const [isGenerating, setIsGenerating] = useState(false);
   
   // Estados de configuración de examen
-  const [numQuestions, setNumQuestions] = useState(3); 
+  const [numQuestions, setNumQuestions] = useState(5); 
   const [numOptions, setNumOptions] = useState(4);
   const [studentLevel, setStudentLevel] = useState('Intermedio'); 
   
@@ -79,10 +114,16 @@ const App = () => {
   const [currentChallenge, setCurrentChallenge] = useState(null); 
   const [userSubmission, setUserSubmission] = useState('');       
   const [userSelections, setUserSelections] = useState({});       
-  const [chatHistory, setChatHistory] = useState([]); // Historial de chat local
+  const [chatHistory, setChatHistory] = useState([]); 
   
   const fileInputRef = useRef(null);
   const chatEndRef = useRef(null);
+
+  // Manejador de Toast
+  const showToast = useCallback((message, type = 'warning') => {
+    setToast({ message, type });
+    setTimeout(() => setToast({ message: null }), 5000);
+  }, []);
   
   // Función para hacer scroll al final del chat
   const scrollToBottom = useCallback(() => {
@@ -101,7 +142,7 @@ const App = () => {
   const handleFileChange = (event) => {
     const selectedFile = event.target.files[0];
     
-    setErrorMessage(null);
+    setToast({ message: null });
     setFile(null);
     setFileContent('');
     setFileType(null);
@@ -114,7 +155,7 @@ const App = () => {
 
     const MAX_FILE_SIZE = 5 * 1024 * 1024; // 5MB
     if (selectedFile.size > MAX_FILE_SIZE) {
-        setErrorMessage("El archivo es demasiado grande. Máximo 5MB.");
+        showToast("El archivo es demasiado grande. Máximo 5MB.", 'error');
         return;
     }
     
@@ -129,29 +170,28 @@ const App = () => {
     reader.onload = async (e) => {
         try {
             if (isImage) {
-                // Para imágenes, convertimos a Base64 para la API
                 const base64Data = await getBase64Image(selectedFile);
                 setFileContent(base64Data);
             } else {
-                // Para texto, usamos el contenido directo
                 setFileContent(e.target.result);
             }
             setIsFileContentReady(true);
+            showToast(`Material "${selectedFile.name}" cargado con éxito.`, 'success');
         } catch (error) {
-            setErrorMessage(`Error al procesar el archivo: ${error.message}`);
+            showToast(`Error al procesar el archivo: ${error.message}`, 'error');
             setFile(null);
             setFileContent('');
         }
     };
     
     reader.onerror = () => {
-      setErrorMessage("Error de lectura del archivo. Asegúrate de que no esté corrupto.");
+      showToast("Error de lectura del archivo. Asegúrate de que no esté corrupto.", 'error');
       setFile(null);
       setFileContent('');
     };
 
     if (isImage) {
-        reader.readAsDataURL(selectedFile); // Necesitamos DataURL para getBase64Image
+        reader.readAsDataURL(selectedFile); 
     } else {
         reader.readAsText(selectedFile);
     }
@@ -161,14 +201,15 @@ const App = () => {
     setFile(null);
     setFileContent('');
     setFileType(null);
-    setErrorMessage(null); 
     setIsFileContentReady(false);
     setCurrentChallenge(null);
     setUserSubmission('');
     setUserSelections({});
+    setChatHistory([]);
     if (fileInputRef.current) {
       fileInputRef.current.value = ''; 
     }
+    showToast("Material de estudio y conversación borrados.", 'warning');
   };
   
   // --- GESTIÓN DEL HISTORIAL DE CHAT (Local) ---
@@ -191,9 +232,8 @@ const App = () => {
 
   const handleGeminiCall = useCallback(async (userPrompt, isCorrection = false, structuredSchema = null, maxRetries = 3) => {
     if (!file || !isFileContentReady) throw new Error('El material no está cargado.');
-    if (!GEMINI_API_KEY) throw new Error('API Key no configurada. Por favor, configura la variable de entorno VITE_GEMINI_API_KEY en Vercel.');
+    if (!GEMINI_API_KEY) throw new Error('API Key no configurada. Por favor, configura la variable de entorno VITE_GEMINI_API_KEY.');
     
-    // Construir la URL de la API dentro de la función para asegurar que se usa la clave cargada.
     const API_URL = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${GEMINI_API_KEY}`;
     
     let systemInstruction;
@@ -202,16 +242,13 @@ const App = () => {
     let parts = [];
 
     if (isCorrection) {
-        // En corrección de desarrollo, el prompt es el texto de las respuestas
         let challengeDataText = `Preguntas de Desarrollo:\n${currentChallenge.data}\nRespuestas del usuario:\n${userSubmission}`;
         
         systemInstruction = "Actúa como un profesor experto y conciso. Proporciona una corrección detallada, una puntuación (inventada, ej: 85/100) y un feedback constructivo. Muestra las respuestas correctas o puntos clave para mejorar. Base la corrección estrictamente en el material adjunto.";
         parts.push({ text: `Por favor, evalúa y corrige las siguientes respuestas proporcionadas por el usuario, basándote en el material de estudio adjunto y el desafío original. ${challengeDataText}` });
 
     } else {
-        // En generación (Examen, Resumen, Flashcards)
         if (fileType.startsWith('image/')) {
-            // Instrucción específica para imágenes
             systemInstruction = "Actúa como un tutor de estudio experto. Analiza la imagen proporcionada como material de estudio. Tu tarea es generar la solicitud del usuario (examen, resumen, flashcards, etc.) basándote ÚNICAMENTE en la información visible o el texto detectado en la imagen.";
             parts.push({ text: userPrompt });
             parts.push({
@@ -221,7 +258,6 @@ const App = () => {
                 }
             });
         } else {
-            // Instrucción para texto plano
             systemInstruction = structuredSchema 
                 ? "Actúa como un generador de exámenes. Crea un examen de opción múltiple estrictamente a partir del material de estudio. DEVUELVE ÚNICAMENTE el JSON solicitado."
                 : "Actúa como un tutor de estudio experto. Proporciona una respuesta detallada y bien organizada basándote estrictamente en el material de estudio. Usa Markdown para formatear la respuesta.";
@@ -236,7 +272,6 @@ const App = () => {
         systemInstruction: { parts: [{ text: systemInstruction }] },
     };
 
-    // Configuración para salida estructurada (JSON)
     if (structuredSchema) {
         payload.generationConfig = {
             responseMimeType: "application/json",
@@ -244,14 +279,12 @@ const App = () => {
         };
     }
 
-    // 2. Guardar mensaje del usuario en el historial local
     const userMessageText = isCorrection 
-        ? (currentChallenge?.type === 'multiple' ? `Respuestas seleccionadas: ${JSON.stringify(userSelections, null, 2)}` : `Respuestas enviadas:\n\n${userSubmission}`)
+        ? (currentChallenge?.type === 'multiple' ? `Respuestas seleccionadas: ${Object.keys(userSelections).map(k => `P${parseInt(k)+1}: ${userSelections[k]}`).join(', ')}` : `Respuestas enviadas:\n\n${userSubmission}`)
         : userPrompt;
     
     saveMessage("user", userMessageText, isCorrection);
     
-    // 3. Llamada con Backoff Exponencial
     for (let attempt = 0; attempt < maxRetries; attempt++) {
         try {
             const response = await fetch(API_URL, {
@@ -260,7 +293,7 @@ const App = () => {
                 body: JSON.stringify(payload)
             });
 
-            if (response.status === 429) { // Tasa Limitada
+            if (response.status === 429) { 
                 if (attempt < maxRetries - 1) {
                     const delay = Math.pow(2, attempt) * 1000 + Math.random() * 1000;
                     await new Promise(resolve => setTimeout(resolve, delay));
@@ -280,7 +313,6 @@ const App = () => {
             if (candidate && candidate.content?.parts?.[0]?.text) {
                 const textResult = candidate.content.parts[0].text;
                 
-                // Procesar JSON si aplica
                 let challengeData = null;
                 if (structuredSchema) {
                     try {
@@ -291,7 +323,6 @@ const App = () => {
                     }
                 }
                 
-                // Guardar la respuesta del modelo
                 saveMessage("model", textResult, isCorrection, false, challengeData);
                 return structuredSchema ? challengeData : textResult;
             } else {
@@ -307,7 +338,7 @@ const App = () => {
             await new Promise(resolve => setTimeout(resolve, delay));
         }
     }
-  }, [saveMessage, file, isFileContentReady, fileContent, fileType, currentChallenge, userSelections, userSubmission, GEMINI_API_KEY]); 
+  }, [saveMessage, file, isFileContentReady, fileContent, fileType, currentChallenge, userSelections, userSubmission, GEMINI_API_KEY, showToast]); 
 
   // --- LÓGICA DE CORRECCIÓN LOCAL (Opción Múltiple) ---
 
@@ -317,7 +348,6 @@ const App = () => {
     const questions = currentChallenge.data.questions;
     let correctCount = 0;
     const results = questions.map((q, index) => {
-        // La clave de la opción correcta está en q.correct_answer (ej: 'A')
         const userAnswer = userSelections[index]; 
         const isCorrect = userAnswer === q.correct_answer;
         if (isCorrect) correctCount++;
@@ -331,8 +361,10 @@ const App = () => {
 
     const totalQuestions = questions.length;
     const scorePercentage = (correctCount / totalQuestions) * 100;
+    const isPassing = scorePercentage >= 60;
+    
+    showToast(`¡Examen completado! Obtuviste un ${scorePercentage.toFixed(0)}%.`, isPassing ? 'success' : 'error');
 
-    // Actualizar el estado del desafío para mostrar la corrección
     setCurrentChallenge(prev => ({
         ...prev,
         isCorrected: true,
@@ -342,15 +374,14 @@ const App = () => {
         results: results,
     }));
 
-    // Añadir mensaje de corrección al chat history (para seguimiento)
     saveMessage("model", 
-        `¡Examen corregido! Obtuviste ${correctCount} de ${totalQuestions} (${scorePercentage.toFixed(0)}%). Revisa las preguntas para ver la retroalimentación.`, 
+        `¡Examen corregido! Obtuviste **${correctCount} de ${totalQuestions}** (${scorePercentage.toFixed(0)}%). Revisa las preguntas de arriba para ver las respuestas correctas.`, 
         true, 
         false,
         { type: 'correction', score: correctCount, total: totalQuestions, percentage: scorePercentage }
     );
 
-  }, [currentChallenge, userSelections, saveMessage]);
+  }, [currentChallenge, userSelections, saveMessage, showToast]);
 
 
   // --- CONTROLADOR GENERAL DE SUBMISIÓN ---
@@ -358,44 +389,39 @@ const App = () => {
     if (!currentChallenge) return;
     
     if (currentChallenge.type === 'multiple') {
-        // --- Corrección CLiente-Side para Opción Múltiple ---
         const totalQuestions = currentChallenge.data.questions?.length || 0;
         const answeredCount = Object.values(userSelections).filter(s => s !== null).length;
 
         if (answeredCount < totalQuestions) {
-             setErrorMessage(`Por favor, responde las ${totalQuestions - answeredCount} preguntas restantes antes de corregir.`);
-             setTimeout(() => setErrorMessage(null), 5000);
+             showToast(`Por favor, responde las ${totalQuestions - answeredCount} preguntas restantes antes de corregir.`, 'warning');
              return;
         }
         handleSubmitMultipleChoice();
         return;
     } 
     
-    // --- Corrección Server-Side (API) para Desarrollo/Ensayo ---
     if (currentChallenge.type === 'development') {
         if (!userSubmission.trim()) {
-            setErrorMessage("Por favor, escribe tus respuestas de desarrollo antes de corregir.");
-             setTimeout(() => setErrorMessage(null), 5000);
+            showToast("Por favor, escribe tus respuestas de desarrollo antes de corregir.", 'warning');
              return;
         }
         
         setIsGenerating(true);
         try {
-            // Se llama a la API para la corrección
+            showToast("Enviando respuestas a la IA para corrección...", 'warning');
             await handleGeminiCall("Solicitud de corrección de examen", true, null);
             
-            // Marca como corregido después del éxito de la API
             setCurrentChallenge(prev => ({ ...prev, isCorrected: true }));
+            showToast("Corrección recibida. Revisa el historial de chat.", 'success');
             
         } catch (error) {
-            setErrorMessage(`Error de la API de corrección: ${error.message || "Ocurrió un error inesperado al procesar tu solicitud."}`);
+            showToast(`Error de la API de corrección: ${error.message}`, 'error');
             saveMessage("model", `ERROR: La llamada a la API de corrección falló.\n\nMensaje: ${error.message || 'Error Desconocido'}`, true, true);
         } finally {
             setIsGenerating(false);
-            setTimeout(() => setErrorMessage(null), 8000);
         }
     }
-  }, [currentChallenge, handleSubmitMultipleChoice, handleGeminiCall, userSubmission, userSelections, saveMessage]);
+  }, [currentChallenge, handleSubmitMultipleChoice, handleGeminiCall, userSubmission, userSelections, saveMessage, showToast]);
 
 
   const generateOneStepContent = useCallback(async (actionPrompt) => {
@@ -406,14 +432,14 @@ const App = () => {
     
     try {
         await handleGeminiCall(actionPrompt, false, null); 
+        showToast("Contenido generado con éxito. Revisa el chat.", 'success');
     } catch (error) {
-        setErrorMessage(`Error de la API: ${error.message || "Ocurrió un error inesperado al procesar tu solicitud."}`);
+        showToast(`Error de la API: ${error.message}`, 'error');
         saveMessage("model", `ERROR: La llamada a la API falló.\n\nMensaje: ${error.message || 'Error Desconocido'}`, false, true);
     } finally {
         setIsGenerating(false);
-        setTimeout(() => setErrorMessage(null), 8000);
     }
-  }, [handleGeminiCall, saveMessage]);
+  }, [handleGeminiCall, saveMessage, showToast]);
 
 
   const generateChallenge = useCallback(async (type, prompt) => {
@@ -433,7 +459,7 @@ const App = () => {
                 type, 
                 data: parsedJson, 
                 userPrompt: prompt, 
-                isCorrected: false, // Nuevo estado
+                isCorrected: false, 
             });
 
             const initialSelections = {};
@@ -443,26 +469,26 @@ const App = () => {
                 });
             }
             setUserSelections(initialSelections);
+            showToast("Examen de opción múltiple generado. ¡A responder!", 'success');
         } else {
             setCurrentChallenge({ 
                 type, 
                 data: generatedContent, 
                 userPrompt: prompt,
-                isCorrected: false, // Nuevo estado
+                isCorrected: false, 
             });
+            showToast("Preguntas de desarrollo generadas. ¡A escribir!", 'success');
         }
 
     } catch (error) {
-        setErrorMessage(`Error de la API: ${error.message || "Ocurrió un error inesperado al procesar tu solicitud."}`);
+        showToast(`Error de la API: ${error.message}`, 'error');
         saveMessage("model", `ERROR: La llamada a la API falló.\n\nMensaje: ${error.message || 'Error Desconocido'}`, false, true);
     } finally {
         setIsGenerating(false);
-        setTimeout(() => setErrorMessage(null), 8000);
     }
-  }, [handleGeminiCall, saveMessage]); 
+  }, [handleGeminiCall, saveMessage, showToast]); 
 
   const handleSelectionChange = useCallback((qIndex, optionLetter) => {
-    // Solo permitir cambios si el examen NO ha sido corregido
     if (currentChallenge && currentChallenge.isCorrected) return;
 
     setUserSelections(prev => ({
@@ -487,17 +513,16 @@ const App = () => {
     
     // Controladores de un solo paso (Resumen, Flashcards)
     if (currentView === View.SUMMARY || currentView === View.FLASHCARDS) {
-        // ... (lógica de resumen/flashcards sin cambios)
         const isSummary = currentView === View.SUMMARY;
         const prompt = isSummary 
             ? "Proporciona un resumen conciso y completo que cubra todos los puntos clave del contenido proporcionado. Utiliza subtítulos y listas de Markdown."
             : "Extrae 10 conceptos clave del material y sus definiciones/explicaciones en formato de flashcards (concepto: definición).";
 
         return (
-            <div className="p-4 border-t bg-gray-50 flex justify-center">
+            <div className="p-4 border-t bg-white flex justify-center shadow-lg">
                 <button
                     onClick={() => generateOneStepContent(prompt)}
-                    className={`w-full sm:w-1/2 px-6 py-3 rounded-xl text-white font-semibold transition duration-150 shadow-lg flex items-center justify-center ${
+                    className={`w-full sm:w-1/2 px-6 py-3 rounded-full text-white font-semibold transition duration-300 shadow-xl flex items-center justify-center transform hover:scale-[1.02] active:scale-[0.98] ${
                         isReadyForAction ? 'bg-indigo-600 hover:bg-indigo-700' : 'bg-indigo-300 cursor-not-allowed'
                     }`}
                     disabled={!isReadyForAction || isChallengeActive}
@@ -530,22 +555,33 @@ const App = () => {
             const isAllAnswered = totalMultipleChoiceAnswered === totalQuestionsMC;
 
             return (
-                <div className="flex flex-col p-4 border-t bg-white">
-                    <div className={`p-3 mb-3 rounded-lg font-bold text-center shadow-lg ${isCorrected ? (currentChallenge.percentage >= 60 ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700') : 'bg-indigo-50 text-indigo-700'}`}>
+                <div className="flex flex-col p-4 border-t bg-white shadow-lg">
+                    <div className={`p-3 mb-4 rounded-lg font-bold text-center shadow-inner transition-colors duration-300 ${isCorrected ? (currentChallenge.percentage >= 60 ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700') : 'bg-indigo-50 text-indigo-700 border border-indigo-200'}`}>
                         <Award className="inline w-5 h-5 mr-2"/> {scoreText}
                     </div>
 
                     {/* Contenedor de preguntas con scroll */}
-                    <div className="flex-1 overflow-y-auto max-h-[300px] sm:max-h-[400px] pr-2 space-y-6 border p-3 rounded-lg bg-gray-50 shadow-inner">
+                    <div className="flex-1 overflow-y-auto max-h-[300px] sm:max-h-[400px] pr-2 space-y-8 p-4 rounded-xl bg-gray-50 border border-gray-200 shadow-inner">
+                        <p className="font-extrabold text-xl text-indigo-700">{currentChallenge.data.title || "Examen Generado"}</p>
                         {currentChallenge.data.questions.map((q, qIndex) => {
-                            // Obtener resultados de corrección (si existe)
                             const result = isCorrected ? currentChallenge.results.find(r => r.qIndex === qIndex) : null;
+                            const isUserCorrect = result && result.isCorrect;
                             
+                            // Determinar el borde y fondo de la pregunta
+                            let questionClass = 'border-gray-300';
+                            if (isCorrected) {
+                                questionClass = isUserCorrect ? 'border-green-500 bg-green-50' : 'border-red-500 bg-red-50';
+                            }
+
                             return (
-                                <div key={qIndex} className="p-3 border-b border-gray-200 last:border-b-0">
-                                    <p className="font-bold mb-2 text-gray-800">P{qIndex + 1}: {q.question}</p>
-                                    <div className="space-y-1">
-                                        {/* Mapear Opciones */}
+                                <div key={qIndex} className={`p-4 border-l-4 rounded-lg shadow-md transition-all duration-300 ${questionClass}`}>
+                                    <p className="font-bold mb-3 text-gray-800 flex items-start">
+                                        <span className={`inline-block mr-2 px-2 py-1 text-xs font-extrabold rounded-full ${isCorrected ? (isUserCorrect ? 'bg-green-600 text-white' : 'bg-red-600 text-white') : 'bg-indigo-600 text-white'}`}>
+                                            P{qIndex + 1}
+                                        </span>
+                                        {q.question}
+                                    </p>
+                                    <div className="space-y-2">
                                         {q.options.map((option, oIndex) => {
                                             const optionMatch = option.trim().match(/^([A-Z])[\.\)]?\s/i);
                                             const optionLetter = optionMatch ? optionMatch[1].toUpperCase() : String.fromCharCode(65 + oIndex); 
@@ -553,47 +589,33 @@ const App = () => {
                                             const isSelected = userSelections[qIndex] === optionLetter;
                                             const isCorrectOption = optionLetter === q.correct_answer;
                                             
-                                            // --- CLASES DE ESTILO DE CORRECCIÓN ---
-                                            let optionClass = 'hover:bg-indigo-50'; // Default
+                                            let optionClass = 'hover:bg-indigo-100 border-transparent'; // Default (not corrected)
                                             if (isCorrected) {
                                                 if (isCorrectOption) {
-                                                    // Es la respuesta correcta
-                                                    optionClass = 'bg-green-200 border border-green-500 font-semibold';
+                                                    optionClass = 'bg-green-200 border-2 border-green-600 font-semibold';
                                                 } else if (isSelected && !isCorrectOption) {
-                                                    // Respuesta del usuario es INCORRECTA
-                                                    optionClass = 'bg-red-200 border border-red-500 font-semibold';
+                                                    optionClass = 'bg-red-200 border-2 border-red-600 font-semibold opacity-80';
                                                 } else {
-                                                    // Opción no seleccionada e incorrecta
-                                                    optionClass = 'bg-gray-100'; 
+                                                    optionClass = 'bg-gray-100 opacity-60'; 
                                                 }
                                             } else {
-                                                // Sin corregir: solo maneja la selección
-                                                optionClass = isSelected ? 'bg-indigo-100 border border-indigo-400' : 'hover:bg-indigo-50';
+                                                optionClass = isSelected ? 'bg-indigo-100 border-2 border-indigo-500' : 'bg-white hover:bg-gray-50 border border-gray-200';
                                             }
 
 
                                             return (
                                                 <div 
                                                     key={oIndex} 
-                                                    className={`flex items-center p-2 rounded-md transition duration-100 ${isCorrected ? 'cursor-default' : 'cursor-pointer'} ${optionClass}`}
+                                                    className={`flex items-center p-3 rounded-lg transition duration-150 shadow-sm ${isCorrected ? 'cursor-default' : 'cursor-pointer'} ${optionClass}`}
                                                     onClick={() => !isCorrected && handleSelectionChange(qIndex, optionLetter)}
                                                 >
-                                                    {/* Icono de feedback */}
-                                                    <div className="w-4 h-4 mr-2 flex items-center justify-center">
-                                                        {isCorrected && isCorrectOption && <Check className="w-4 h-4 text-green-700" />}
-                                                        {isCorrected && isSelected && !isCorrectOption && <X className="w-4 h-4 text-red-700" />}
+                                                    <div className="w-5 h-5 mr-3 flex items-center justify-center flex-shrink-0">
+                                                        {isCorrected && isCorrectOption && <Check className="w-5 h-5 text-green-700" />}
+                                                        {isCorrected && isSelected && !isCorrectOption && <X className="w-5 h-5 text-red-700" />}
+                                                        {!isCorrected && isSelected && <span className="w-3 h-3 bg-indigo-600 rounded-full" />}
                                                     </div>
                                                     
-                                                    <input
-                                                        type="radio"
-                                                        id={`q${qIndex}-o${oIndex}`}
-                                                        name={`question-${qIndex}`}
-                                                        checked={isSelected}
-                                                        onChange={() => !isCorrected && handleSelectionChange(qIndex, optionLetter)}
-                                                        className="form-radio h-4 w-4 text-indigo-600 transition duration-150 ease-in-out hidden" // Ocultar el radio nativo
-                                                        disabled={isGenerating || isCorrected}
-                                                    />
-                                                    <label htmlFor={`q${qIndex}-o${oIndex}`} className="ml-3 text-sm font-medium text-gray-700 flex-1">
+                                                    <label className="text-sm font-medium text-gray-700 flex-1 cursor-inherit">
                                                         {option}
                                                     </label>
                                                 </div>
@@ -608,7 +630,7 @@ const App = () => {
                     {!isCorrected && (
                         <button
                             onClick={handleSubmitChallenge}
-                            className={`mt-4 w-full px-6 py-3 rounded-xl text-white font-semibold transition duration-150 shadow-lg flex items-center justify-center ${
+                            className={`mt-4 w-full px-6 py-3 rounded-full text-white font-semibold transition duration-300 shadow-xl flex items-center justify-center transform hover:scale-[1.02] active:scale-[0.98] ${
                                 isAllAnswered && !isGenerating ? 'bg-green-600 hover:bg-green-700' : 'bg-green-300 cursor-not-allowed'
                             }`}
                             disabled={!isAllAnswered || isGenerating}
@@ -624,15 +646,15 @@ const App = () => {
         // 2B. Desarrollo (Caja de texto)
         if (currentView === View.EXAM_DEVELOPMENT) {
             return (
-                <div className="p-4 border-t bg-gray-50 flex flex-col space-y-3">
-                    <h3 className="text-lg font-semibold text-gray-700">Tus Respuestas al Examen de Desarrollo:</h3>
+                <div className="p-4 border-t bg-white flex flex-col space-y-3 shadow-lg">
+                    <h3 className="text-lg font-bold text-gray-800 flex items-center"><Edit className="w-5 h-5 mr-2 text-indigo-600"/> Envía tu Desarrollo</h3>
                     {isCorrected && (
-                        <div className="p-3 bg-indigo-100 text-indigo-700 rounded-lg text-sm font-medium">
-                            La corrección del profesor (IA) se ha añadido a la conversación de abajo.
+                        <div className="p-3 bg-indigo-50 text-indigo-700 rounded-lg text-sm font-medium border border-indigo-200">
+                            La corrección detallada del profesor (IA) se ha añadido a la conversación de abajo.
                         </div>
                     )}
                     <textarea
-                        className="w-full p-3 border border-gray-300 rounded-lg shadow-inner focus:ring-indigo-500 focus:border-indigo-500 text-sm resize-y min-h-32"
+                        className="w-full p-4 border border-gray-300 rounded-xl shadow-inner focus:ring-indigo-500 focus:border-indigo-500 text-sm resize-y min-h-40 transition duration-150"
                         placeholder="Escribe aquí tus respuestas completas al examen de desarrollo..."
                         value={userSubmission}
                         onChange={(e) => setUserSubmission(e.target.value)}
@@ -641,7 +663,7 @@ const App = () => {
                     {!isCorrected && (
                         <button
                             onClick={handleSubmitChallenge}
-                            className={`w-full px-6 py-3 rounded-xl text-white font-semibold transition duration-150 shadow-lg flex items-center justify-center ${
+                            className={`w-full px-6 py-3 rounded-full text-white font-semibold transition duration-300 shadow-xl flex items-center justify-center transform hover:scale-[1.02] active:scale-[0.98] ${
                                 userSubmission.trim() && !isGenerating ? 'bg-green-600 hover:bg-green-700' : 'bg-green-300 cursor-not-allowed'
                             }`}
                             disabled={!userSubmission.trim() || isGenerating}
@@ -657,61 +679,64 @@ const App = () => {
 
     // Paso 1: Botón de Generación de Desafío y Configuraciones
     return (
-        <div className="flex flex-col space-y-3 p-4 border-t bg-gray-50">
+        <div className="flex flex-col space-y-4 p-4 border-t bg-gray-50 shadow-inner">
             <div className="flex flex-col space-y-3 sm:flex-row items-center justify-center sm:space-y-0 sm:space-x-4">
             
-                {isMultipleChoice && (
-                    <div className="flex flex-col space-y-2 sm:flex-row sm:space-x-4 sm:space-y-0 bg-white p-3 rounded-lg shadow-sm w-full sm:w-auto">
-                        <label className="text-gray-700 text-sm font-medium flex items-center"><Settings className="w-4 h-4 mr-1"/> Configuración:</label>
-                        
-                        <div className="flex items-center space-x-2">
-                          <label className="text-gray-700 text-sm font-medium">Preguntas:</label>
-                          <select 
-                              value={numQuestions} 
-                              onChange={(e) => setNumQuestions(parseInt(e.target.value))}
-                              className="p-2 border border-gray-300 rounded-lg shadow-sm text-sm w-full sm:w-auto"
-                              disabled={!isReadyForAction}
-                          >
-                              {[1, 3, 5, 10].map(n => <option key={n} value={n}>{n}</option>)}
-                          </select>
-                        </div>
-                        
-                        <div className="flex items-center space-x-2">
-                          <label className="text-gray-700 text-sm font-medium">Opciones:</label>
-                          <select 
-                              value={numOptions} 
-                              onChange={(e) => setNumOptions(parseInt(e.target.value))}
-                              className="p-2 border border-gray-300 rounded-lg shadow-sm text-sm w-full sm:w-auto"
-                              disabled={!isReadyForAction}
-                          >
-                              {[2, 3, 4].map(n => <option key={n} value={n}>{n}</option>)}
-                          </select>
-                        </div>
-                    </div>
-                )}
+                {/* Controles de Configuración */}
+                <div className="flex flex-wrap gap-3 bg-white p-4 rounded-xl shadow-md w-full justify-center">
+                    <label className="text-gray-700 font-bold flex items-center text-sm"><Settings className="w-4 h-4 mr-1"/> Ajustes del Examen:</label>
+                    
+                    {isMultipleChoice && (
+                        <>
+                            <div className="flex items-center space-x-2">
+                                <label className="text-gray-600 text-sm"># Preguntas:</label>
+                                <select 
+                                    value={numQuestions} 
+                                    onChange={(e) => setNumQuestions(parseInt(e.target.value))}
+                                    className="p-2 border border-gray-300 rounded-lg shadow-sm text-sm focus:ring-indigo-500"
+                                    disabled={!isReadyForAction}
+                                >
+                                    {[3, 5, 10].map(n => <option key={n} value={n}>{n}</option>)}
+                                </select>
+                            </div>
+                            
+                            <div className="flex items-center space-x-2">
+                                <label className="text-gray-600 text-sm"># Opciones:</label>
+                                <select 
+                                    value={numOptions} 
+                                    onChange={(e) => setNumOptions(parseInt(e.target.value))}
+                                    className="p-2 border border-gray-300 rounded-lg shadow-sm text-sm focus:ring-indigo-500"
+                                    disabled={!isReadyForAction}
+                                >
+                                    {[2, 3, 4].map(n => <option key={n} value={n}>{n}</option>)}
+                                </select>
+                            </div>
+                        </>
+                    )}
 
-                {currentView === View.EXAM_DEVELOPMENT && (
-                    <div className="flex items-center space-x-4 bg-white p-3 rounded-lg shadow-sm w-full sm:w-auto justify-center">
-                         <label className="text-gray-700 text-sm font-medium flex items-center"><Settings className="w-4 h-4 mr-1"/> Nivel:</label>
-                        <select 
-                            value={studentLevel} 
-                            onChange={(e) => setStudentLevel(e.target.value)}
-                            className="p-2 border border-gray-300 rounded-lg shadow-sm text-sm w-full sm:w-auto"
-                            disabled={!isReadyForAction}
-                        >
-                            <option value="Básico">Básico (Primaria)</option>
-                            <option value="Intermedio">Intermedio (Secundaria)</option>
-                            <option value="Avanzado">Avanzado (Bachillerato/Universidad)</option>
-                        </select>
-                    </div>
-                )}
+                    {currentView === View.EXAM_DEVELOPMENT && (
+                        <div className="flex items-center space-x-2">
+                             <label className="text-gray-600 text-sm">Nivel:</label>
+                            <select 
+                                value={studentLevel} 
+                                onChange={(e) => setStudentLevel(e.target.value)}
+                                className="p-2 border border-gray-300 rounded-lg shadow-sm text-sm focus:ring-indigo-500"
+                                disabled={!isReadyForAction}
+                            >
+                                <option value="Básico">Básico</option>
+                                <option value="Intermedio">Intermedio</option>
+                                <option value="Avanzado">Avanzado</option>
+                            </select>
+                        </div>
+                    )}
+                </div>
             </div>
             
             <button
                 onClick={() => generateChallenge(isMultipleChoice ? 'multiple' : 'development', actionPrompt)}
-                className={`w-full px-6 py-3 rounded-xl text-white font-semibold transition duration-150 shadow-lg flex items-center justify-center ${
+                className={`w-full px-6 py-3 rounded-full text-white font-bold transition duration-300 shadow-xl flex items-center justify-center transform hover:scale-[1.02] active:scale-[0.98] ${
                     isReadyForAction ? 'bg-indigo-600 hover:bg-indigo-700' : 'bg-indigo-300 cursor-not-allowed'
-                }`}
+                } ${isGenerating ? 'opacity-70' : ''}`}
                 disabled={!isReadyForAction}
             >
                 {isGenerating ? <Loader className="w-5 h-5 animate-spin mr-2" /> : <Zap className="w-5 h-5 mr-2" />}
@@ -734,14 +759,14 @@ const App = () => {
             setUserSubmission('');
             setUserSelections({});
         }} 
-        className={`flex items-center px-3 py-2 sm:px-4 sm:py-3 text-xs sm:text-sm font-medium border-b-2 transition duration-150 rounded-t-lg whitespace-nowrap ${
+        className={`flex items-center px-4 py-3 text-sm font-medium border-b-2 transition duration-200 rounded-t-lg whitespace-nowrap ${
           isActive
-            ? 'border-indigo-600 text-indigo-700 font-semibold bg-white shadow-t-inner' 
-            : 'border-transparent text-gray-600 hover:text-indigo-600 hover:border-indigo-300'
+            ? 'border-indigo-600 text-indigo-700 font-bold bg-white shadow-t-lg' 
+            : 'border-transparent text-gray-600 hover:text-indigo-600 hover:border-indigo-400'
         }`}
         disabled={isGenerating}
       >
-          <Icon className="w-3 h-3 sm:w-4 sm:h-4 mr-1 sm:mr-2" />
+          <Icon className="w-4 h-4 mr-2" />
           {label}
       </button>
     );
@@ -754,54 +779,39 @@ const App = () => {
     const FileIcon = file ? (isText ? FileText : Image) : Upload;
 
     return (
-      <div className="p-4 border-t border-b bg-white flex flex-col sm:flex-row items-center justify-between shadow-md space-y-2 sm:space-y-0">
+      <div className="p-4 border-b bg-white flex flex-col sm:flex-row items-center justify-between shadow-lg space-y-3 sm:space-y-0">
         
-        {errorMessage && (
-          <div className="bg-red-100 border border-red-400 text-red-700 px-4 py-2 rounded-lg mb-2 w-full flex items-center text-sm">
-            <AlertTriangle className="w-4 h-4 mr-2"/>
-            {errorMessage}
-          </div>
-        )}
-
-        <div className="flex-1 w-full sm:w-auto">
+        <div className="flex-1 w-full flex flex-col sm:flex-row items-center justify-start space-x-0 sm:space-x-3 space-y-3 sm:space-y-0">
           {file ? (
-            <div className="flex items-center space-x-3 w-full">
-              <Check className="w-5 h-5 text-green-500 flex-shrink-0" />
-              <span className="text-sm font-medium text-gray-700 truncate min-w-0 flex-1">
+            <div className="flex items-center space-x-3 w-full sm:w-auto p-2 bg-indigo-50 rounded-lg border border-indigo-200 shadow-inner flex-shrink-0">
+              <Check className="w-5 h-5 text-green-600 flex-shrink-0" />
+              <span className="text-sm font-semibold text-gray-700 truncate min-w-0 flex-1">
                 <FileIcon className="inline w-4 h-4 mr-1 text-indigo-500" />
                 {file.name} 
-                {!isFileContentReady && (
-                  <span className="ml-2 text-yellow-600 flex items-center">
-                    <Loader className="w-4 h-4 animate-spin mr-1"/> Procesando...
-                  </span>
-                )}
               </span>
-              <button onClick={clearFile} className="text-red-500 hover:text-red-700 p-1 rounded-full flex-shrink-0">
-                <X className="w-4 h-4" />
+              <button onClick={clearFile} className="text-red-500 hover:text-red-700 p-1 rounded-full flex-shrink-0 transition duration-150" title="Borrar Material y Chat">
+                <X className="w-5 h-5" />
               </button>
             </div>
           ) : (
-            <div className="text-sm text-gray-500 w-full">
-              {isGenerating 
-                  ? "Generando contenido, espera un momento..." 
-                  : "Paso 1: Sube tu material de estudio (.txt, .jpg, .png)" 
-              }
+            <div className="text-sm font-medium text-gray-600 w-full sm:w-auto">
+              <span className="text-indigo-600 font-bold">Paso 1:</span> Sube tu material de estudio (.txt, .jpg, .png)
             </div>
           )}
         </div>
         
         <button 
           onClick={() => fileInputRef.current.click()} 
-          className={`flex items-center justify-center px-4 py-2 text-sm rounded-lg transition duration-150 shadow-sm w-full sm:w-auto ${
+          className={`flex items-center justify-center px-6 py-2 text-sm rounded-full font-semibold transition duration-300 shadow-md transform hover:scale-[1.05] active:scale-[0.98] w-full sm:w-auto ${
             isGenerating || file || currentChallenge
-              ? 'bg-gray-200 text-gray-500 cursor-not-allowed'
+              ? 'bg-gray-300 text-gray-600 cursor-not-allowed'
               : 'bg-indigo-500 text-white hover:bg-indigo-600'
           }`}
           title="Subir Archivo"
           disabled={isGenerating || file || currentChallenge} 
         >
           <Upload className="w-4 h-4 mr-2"/>
-          Subir Material
+          {file ? 'Cambiar Material' : 'Subir Material'}
         </button>
         
         <input
@@ -826,14 +836,14 @@ const App = () => {
       <div className="flex flex-col h-full bg-white shadow-2xl rounded-xl overflow-hidden border border-gray-200">
         
         {/* Pestañas de Navegación */}
-        <div className="flex overflow-x-auto border-b border-gray-200 bg-gray-50">
+        <div className="flex overflow-x-auto border-b border-gray-200 bg-gray-50 p-2 sm:p-0">
           <TabButton label="Examen Múltiple" view={View.EXAM_MULTIPLE} icon={Zap}/>
           <TabButton label="Examen de Desarrollo" view={View.EXAM_DEVELOPMENT} icon={Edit}/>
           <TabButton label="Resumen" view={View.SUMMARY} icon={BookOpen}/>
           <TabButton label="Flashcards" view={View.FLASHCARDS} icon={Layers}/>
-          <div className="ml-auto flex items-center text-xs text-gray-500 px-2 sm:px-4 py-2">
-              <Bot className="w-3 h-3 mr-1 text-indigo-400" />
-              Tutor Multi-Formato
+          <div className="ml-auto hidden sm:flex items-center text-sm text-gray-500 px-4 py-2">
+              <Bot className="w-4 h-4 mr-2 text-indigo-400" />
+              Tutor Impulsado por Gemini
           </div>
         </div>
         
@@ -841,53 +851,58 @@ const App = () => {
         <FileUploadControl />
 
         {/* Área de Visualización (Chat) */}
-        <div className="flex-1 overflow-y-auto p-4 space-y-4 bg-gray-50">
+        <div className="flex-1 overflow-y-auto p-4 space-y-6 bg-gray-50">
           {chatHistory.length === 0 ? (
             <div className="text-center text-gray-500 py-10">
-              <Bot className="w-10 h-10 mx-auto mb-2 text-indigo-400" />
-              <p>Sube tu material (.txt, .jpg, o .png) y haz clic en la opción deseada para generar tu contenido de estudio.</p>
-              <p className="text-xs mt-4">Nota: Esta versión usa la visión de Gemini para analizar imágenes y tiene corrección instantánea en tests múltiples.</p>
+              <Bot className="w-12 h-12 mx-auto mb-4 text-indigo-500" />
+              <p className="text-lg font-semibold text-gray-700">¡Bienvenido a tu Tutor de Estudio Personalizado!</p>
+              <p className="mt-2 text-sm">Sube tu material y selecciona una pestaña para comenzar a estudiar de forma interactiva.</p>
             </div>
           ) : (
             chatHistory.map((msg, index) => (
               <div key={index} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
-                <div className={`max-w-[95%] md:max-w-[70%] lg:max-w-[60%] p-3 rounded-xl shadow-md ${
+                <div className={`max-w-[95%] md:max-w-[75%] lg:max-w-[65%] p-4 rounded-xl shadow-lg transition-all duration-200 border ${
                   msg.role === 'user' 
-                    ? (msg.isSubmission ? 'bg-green-100 text-gray-800 rounded-br-none border border-green-300' : 'bg-indigo-600 text-white rounded-br-none')
-                    : (msg.isError ? 'bg-red-100 text-red-800 rounded-tl-none border border-red-400' : 'bg-white text-gray-800 rounded-tl-none border border-gray-200')
+                    ? (msg.isSubmission ? 'bg-green-50 text-gray-800 rounded-br-none border-green-300' : 'bg-indigo-600 text-white rounded-br-none')
+                    : (msg.isError ? 'bg-red-50 text-red-800 rounded-tl-none border-red-300' : 'bg-white text-gray-800 rounded-tl-none border-gray-200')
                 }`}>
+                  
+                  {/* Etiqueta de Material */}
                   {msg.file && (
-                    <p className={`font-semibold text-xs mb-1 ${msg.role === 'user' ? 'text-indigo-200' : 'text-gray-500'}`}>
+                    <p className={`font-semibold text-xs mb-2 ${msg.role === 'user' ? 'text-indigo-200' : 'text-gray-500'}`}>
                       {msg.file.type.startsWith('image/') ? <Image className="inline w-3 h-3 mr-1"/> : <FileText className="inline w-3 h-3 mr-1"/>} 
-                      Material: {msg.file.name}
+                      {msg.role === 'user' ? 'Enviado sobre: ' : 'Generado sobre: '} {msg.file.name}
                     </p>
                   )}
+                  
+                  {/* Etiqueta de Corrección (Score) */}
                   {msg.correctionData && msg.correctionData.type === 'correction' && (
-                       <p className={`font-semibold text-xs mb-1 ${msg.role === 'user' ? 'text-indigo-200' : 'text-green-700'}`}>
+                       <p className={`font-extrabold text-sm mb-2 ${msg.correctionData.percentage >= 60 ? 'text-green-700' : 'text-red-700'} flex items-center`}>
+                          <Award className="w-4 h-4 mr-1"/>
                           Resultado: {msg.correctionData.score} de {msg.correctionData.total} ({msg.correctionData.percentage.toFixed(0)}%)
                        </p>
                   )}
-                  <p className="whitespace-pre-wrap text-sm">
-                    {msg.text}
-                  </p>
+                  
+                  {/* Contenido del Mensaje */}
+                  <div className="whitespace-pre-wrap text-sm" dangerouslySetInnerHTML={{ __html: msg.text.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>').replace(/\n/g, '<br/>') }} />
                 </div>
               </div>
             ))
           )}
           {isGenerating && (
             <div className="flex justify-start">
-              <div className="max-w-4xl p-3 rounded-xl shadow-md bg-white rounded-tl-none border border-gray-200">
+              <div className="max-w-4xl p-4 rounded-xl shadow-md bg-white rounded-tl-none border border-gray-200 animate-pulse-slow">
                 <div className="flex items-center space-x-2 text-gray-500">
                   <Loader className="w-5 h-5 animate-spin"/>
-                  <span>Generando respuesta de IA (Gemini)...</span>
+                  <span>La IA está trabajando...</span>
                 </div>
               </div>
             </div>
           )}
           {currentChallenge && (
              <div className="flex justify-center w-full py-4">
-                <p className="px-4 py-2 bg-yellow-100 text-yellow-800 border border-yellow-300 rounded-lg text-sm font-medium animate-pulse text-center">
-                    ¡{currentChallenge.type === 'multiple' ? 'Selecciona tus respuestas' : 'Escribe tus respuestas'} y pulsa "Enviar".
+                <p className="px-4 py-2 bg-yellow-100 text-yellow-800 border border-yellow-300 rounded-full text-sm font-medium shadow-md text-center">
+                    ¡{currentChallenge.type === 'multiple' ? 'Responde las preguntas de arriba' : 'Escribe tus respuestas abajo'} y pulsa el botón verde!
                 </p>
              </div>
           )}
@@ -897,6 +912,9 @@ const App = () => {
         {/* Controles de Acción por Pestaña */}
         {renderInputControls()}
       </div>
+      
+      {/* Componente Toast para Notificaciones */}
+      <Toast message={toast.message} type={toast.type} onClose={() => setToast({ message: null })} />
     </div>
   );
 };
