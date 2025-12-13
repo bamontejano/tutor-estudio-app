@@ -1,27 +1,26 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
+// Importaciones de Firebase requeridas para el entorno Canvas
+import { initializeApp } from 'firebase/app';
+import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from 'firebase/auth';
+import { getFirestore, doc, getDoc, addDoc, setDoc, updateDoc, deleteDoc, onSnapshot, collection, query, where, getDocs } from 'firebase/firestore';
+
 
 // Constantes de Firebase para la inicialización
 const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {};
 const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
 const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
 
-// Importaciones de Firebase (Asumidas disponibles en el entorno Canvas)
-// Nota: En un entorno de desarrollo real, se importaría desde 'firebase/app', 'firebase/auth', etc.
-// Aquí se asume que las funciones están disponibles globalmente o se inicializan de forma similar
-// al HTML, pero usamos la estructura de React para la inyección de dependencias.
-
-// Placeholder de Inicialización de Firebase (ya que React se compila en un entorno que lo simula)
-// Estas variables contendrán las instancias de Firebase una vez inicializadas.
+// Placeholder de Inicialización de Firebase
 let app = null;
 let db = null;
 let auth = null;
 
-// --- Funciones Auxiliares de API de Gemini ---
-
+// --- Corrección de la API de Gemini: Usamos URL Base sin '?key=' cuando es vacía ---
 // Importante: No se usa la clave API aquí. El entorno Canvas la inyecta.
 const API_KEY = ""; 
 const MODEL_NAME = "gemini-2.5-flash-preview-09-2025";
-const API_URL = `https://generativelanguage.googleapis.com/v1beta/models/${MODEL_NAME}:generateContent?key=${API_KEY}`;
+// URL corregida: Eliminamos el sufijo '?key=${API_KEY}' para evitar problemas de autenticación
+const API_URL = `https://generativelanguage.googleapis.com/v1beta/models/${MODEL_NAME}:generateContent`;
 
 // Función de retardo con retroceso exponencial
 const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
@@ -33,6 +32,7 @@ const fetchWithRetries = async (url, options, maxRetries = 5) => {
             if (!response.ok) {
                 // Manejar errores HTTP (4xx, 5xx)
                 const errorBody = await response.json();
+                // Incluir el cuerpo del error en el mensaje para facilitar el diagnóstico
                 throw new Error(`HTTP error! Status: ${response.status}, Details: ${JSON.stringify(errorBody)}`);
             }
             return response;
@@ -109,6 +109,7 @@ const generateContent = async (prompt, fileData, systemInstruction, responseMime
             return text;
         } else {
             const errorMessage = result.error?.message || "Error desconocido al generar contenido.";
+            // Lanzar un error más detallado si es un error de la API.
             throw new Error(errorMessage);
         }
     } catch (e) {
@@ -458,9 +459,32 @@ export default function App() {
     const [darkMode, setDarkMode] = useState(false); // Nuevo estado para Dark Mode
 
     const chatContainerRef = useRef(null);
-
-    // --- Lógica de Dark Mode (Cargado desde localStorage al inicio) ---
+    
+    // --- Lógica de Inicialización de Firebase (Para futuros usos con Firestore) ---
     useEffect(() => {
+        try {
+            if (Object.keys(firebaseConfig).length > 0 && !app) {
+                // Inicializar App
+                app = initializeApp(firebaseConfig);
+                auth = getAuth(app);
+                db = getFirestore(app);
+
+                // Autenticar: Usar token si está disponible, sino, anónimo
+                const signInUser = async () => {
+                    if (initialAuthToken) {
+                        await signInWithCustomToken(auth, initialAuthToken);
+                    } else {
+                        await signInAnonymously(auth);
+                    }
+                    console.log("Firebase Auth inicializado. User ID:", auth.currentUser?.uid);
+                };
+                signInUser();
+            }
+        } catch (error) {
+            console.error("Error al inicializar Firebase:", error);
+        }
+        
+        // Cargar Dark Mode desde localStorage
         const isDark = localStorage.getItem('darkMode') === 'true';
         setDarkMode(isDark);
         if (isDark) {
@@ -468,6 +492,9 @@ export default function App() {
         }
     }, []);
 
+
+    // --- Lógica de Dark Mode (Cargado desde localStorage al inicio) ---
+    // (Lógica movida parcialmente al useEffect de inicialización, dejando la función toggle aquí)
     const toggleDarkMode = () => {
         setDarkMode(prev => {
             const newState = !prev;
