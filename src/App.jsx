@@ -5,7 +5,7 @@ import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged }
 import { getFirestore, doc, getDoc, addDoc, setDoc, updateDoc, deleteDoc, onSnapshot, collection, query, where, getDocs } from 'firebase/firestore';
 
 
-// Constantes de Firebase para la inicialización
+// Constantes de Firebase para la inicialización (proporcionadas por el entorno Canvas)
 const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {};
 const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
 const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
@@ -15,14 +15,13 @@ let app = null;
 let db = null;
 let auth = null;
 
-// --- Corrección de la API de Gemini: Usamos URL Base sin '?key=' cuando es vacía ---
-// Importante: No se usa la clave API aquí. El entorno Canvas la inyecta.
+// --- Corrección de la API de Gemini: Usamos URL Base sin '?key=' ---
+// La clave API la inyecta el entorno Canvas si la dejamos vacía.
 const API_KEY = ""; 
 const MODEL_NAME = "gemini-2.5-flash-preview-09-2025";
-// URL corregida: Eliminamos el sufijo '?key=${API_KEY}' para evitar problemas de autenticación
 const API_URL = `https://generativelanguage.googleapis.com/v1beta/models/${MODEL_NAME}:generateContent`;
 
-// Función de retardo con retroceso exponencial
+// Función de retardo con retroceso exponencial (para manejo de errores de red)
 const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
 const fetchWithRetries = async (url, options, maxRetries = 5) => {
@@ -51,7 +50,7 @@ const fetchWithRetries = async (url, options, maxRetries = 5) => {
  * @param {string} prompt El prompt de la IA.
  * @param {Object | null} fileData Los datos del archivo cargado, si existen.
  * @param {string} systemInstruction La instrucción del sistema para guiar la respuesta.
- * @param {string} responseMimeType El tipo MIME de la respuesta esperada (por ejemplo, "text/plain" o "application/json").
+ * @param {string} responseMimeType El tipo MIME de la respuesta esperada.
  * @param {Object | null} responseSchema El esquema JSON si se espera una respuesta estructurada.
  * @returns {Promise<string | Object>} El texto generado o el objeto JSON parseado.
  */
@@ -494,7 +493,6 @@ export default function App() {
 
 
     // --- Lógica de Dark Mode (Cargado desde localStorage al inicio) ---
-    // (Lógica movida parcialmente al useEffect de inicialización, dejando la función toggle aquí)
     const toggleDarkMode = () => {
         setDarkMode(prev => {
             const newState = !prev;
