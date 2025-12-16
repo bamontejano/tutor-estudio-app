@@ -1,22 +1,18 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-// Importaciones de Firebase requeridas para el entorno Canvas
-import { initializeApp } from 'firebase/app';
-import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from 'firebase/auth';
-import { getFirestore, doc, getDoc, addDoc, setDoc, updateDoc, deleteDoc, onSnapshot, collection, query, where, getDocs } from 'firebase/firestore';
 
-
-// Constantes de Firebase para la inicialización (proporcionadas por el entorno Canvas)
+// --- Constantes para la API de Gemini ---
+// Eliminadas las importaciones de Firebase que causaban el error de compilación.
+// Las variables de configuración de Firebase se mantienen como placeholders.
 const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {};
 const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
 const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
 
-// Placeholder de Inicialización de Firebase
+// Placeholders de servicios (No se inicializan aquí para evitar errores de compilación)
 let app = null;
 let db = null;
 let auth = null;
 
 // --- Corrección de la API de Gemini: Usamos URL Base sin '?key=' ---
-// La clave API la inyecta el entorno Canvas si la dejamos vacía.
 const API_KEY = ""; 
 const MODEL_NAME = "gemini-2.5-flash-preview-09-2025";
 const API_URL = `https://generativelanguage.googleapis.com/v1beta/models/${MODEL_NAME}:generateContent`;
@@ -47,12 +43,7 @@ const fetchWithRetries = async (url, options, maxRetries = 5) => {
 
 /**
  * Llama a la API de Gemini para generar contenido basado en un prompt y material de estudio.
- * @param {string} prompt El prompt de la IA.
- * @param {Object | null} fileData Los datos del archivo cargado, si existen.
- * @param {string} systemInstruction La instrucción del sistema para guiar la respuesta.
- * @param {string} responseMimeType El tipo MIME de la respuesta esperada.
- * @param {Object | null} responseSchema El esquema JSON si se espera una respuesta estructurada.
- * @returns {Promise<string | Object>} El texto generado o el objeto JSON parseado.
+ * [FUNCIÓN CRÍTICA DE IA]
  */
 const generateContent = async (prompt, fileData, systemInstruction, responseMimeType = 'text/plain', responseSchema = null) => {
     const contents = [];
@@ -453,46 +444,26 @@ export default function App() {
     const [fileData, setFileData] = useState(null);
     const [isGenerating, setIsGenerating] = useState(false);
     const [userInput, setUserInput] = useState('');
-    const [currentChallenge, setCurrentChallenge] = useState(null); // Para guardar el examen JSON
+    const [currentChallenge, setCurrentChallenge] = useState(null); 
     const [errorMessage, setErrorMessage] = useState(null);
-    const [darkMode, setDarkMode] = useState(false); // Nuevo estado para Dark Mode
+    const [darkMode, setDarkMode] = useState(false); 
 
     const chatContainerRef = useRef(null);
     
-    // --- Lógica de Inicialización de Firebase (Para futuros usos con Firestore) ---
+    // --- Lógica de Inicialización (Solo Dark Mode) ---
     useEffect(() => {
-        try {
-            if (Object.keys(firebaseConfig).length > 0 && !app) {
-                // Inicializar App
-                app = initializeApp(firebaseConfig);
-                auth = getAuth(app);
-                db = getFirestore(app);
-
-                // Autenticar: Usar token si está disponible, sino, anónimo
-                const signInUser = async () => {
-                    if (initialAuthToken) {
-                        await signInWithCustomToken(auth, initialAuthToken);
-                    } else {
-                        await signInAnonymously(auth);
-                    }
-                    console.log("Firebase Auth inicializado. User ID:", auth.currentUser?.uid);
-                };
-                signInUser();
-            }
-        } catch (error) {
-            console.error("Error al inicializar Firebase:", error);
-        }
-        
         // Cargar Dark Mode desde localStorage
         const isDark = localStorage.getItem('darkMode') === 'true';
         setDarkMode(isDark);
         if (isDark) {
             document.documentElement.classList.add('dark');
         }
+        
+        // El código original de Firebase se ha eliminado aquí para resolver el error de compilación.
     }, []);
 
 
-    // --- Lógica de Dark Mode (Cargado desde localStorage al inicio) ---
+    // --- Lógica de Dark Mode ---
     const toggleDarkMode = () => {
         setDarkMode(prev => {
             const newState = !prev;
