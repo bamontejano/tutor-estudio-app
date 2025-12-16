@@ -7,10 +7,9 @@ import { Sun, Moon, Upload, Send, X, CheckCircle, XCircle, AlertCircle } from 'l
 
 // ⚠️ IMPORTANTE: En producción, NUNCA expongas tu API key en el frontend
 // Solución recomendada: Crear un backend proxy que maneje las llamadas a la API
-const API_KEY = import.meta.env.VITE_GEMINI_API_KEY || ""; 
-const MODEL_NAME = "gemini-2.0-flash-exp";
-const API_URL = `https://generativelanguage.googleapis.com/v1beta/models/${MODEL_NAME}:generateContent?key=${API_KEY}`;
-
+const API_KEY = import.meta.env.VITE_GROQ_API_KEY || "";
+const MODEL_NAME = "llama-3.1-70b-versatile";
+const API_URL = "https://api.groq.com/openai/v1/chat/completions";
 // Límites de archivo
 const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10MB
 const ALLOWED_FILE_TYPES = {
@@ -265,7 +264,7 @@ const StudyOptions = React.memo(({ onSelectOption, isGenerating, materialLoaded,
         {options.map(option => (
           <button
             key={option.id}
-            onClick={() => onSelectOption(option.label, option.prompt)}
+            onClick={() => onSelectOption(option.label, option.prompt, option.id === 'quiz')}
             disabled={isGenerating || !materialLoaded}
             className={`${baseClasses} ${isGenerating || !materialLoaded ? disabledClasses : enabledClasses}`}
           >
@@ -628,11 +627,11 @@ export default function App() {
     }
   }, [fileData]);
 
-  const handleSelectOption = (optionType, promptInstruction) => {
-    if (!fileData) {
-      showToast('Por favor, sube un archivo primero', 'error');
-      return;
-    }
+const handleSelectOption = (optionType, promptInstruction, isQuiz = false) => {
+  // ... código existente ...
+  
+  processChat(userPrompt, systemPrompt, isQuiz); // ← Cambia el tercer parámetro
+};
 
     const fileDescription = fileData.text.length > 1000 
       ? fileData.text.substring(0, 1000) + '...' 
