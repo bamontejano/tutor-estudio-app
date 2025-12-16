@@ -628,25 +628,25 @@ export default function App() {
   }, [fileData]);
 
 const handleSelectOption = (optionType, promptInstruction, isQuiz = false) => {
-  // ... código existente ...
-  
-  processChat(userPrompt, systemPrompt, isQuiz); // ← Cambia el tercer parámetro
+  if (!fileData) {
+    showToast('Primero carga un archivo', 'error');
+    return;
+  }
+
+  const fileDescription = fileData.text.length > 1000 
+    ? fileData.text.substring(0, 1000) + '...' 
+    : fileData.text;
+
+  const systemPrompt = `Eres un tutor de estudio experto y didáctico. Analiza el material proporcionado y cumple con la solicitud de manera clara, estructurada y educativa.`;
+
+  const userPrompt = `Material de estudio:\n\n"${fileDescription}"\n\nTarea: ${promptInstruction}`;
+
+  if (optionType === 'Generar Examen') {
+    processChat(userPrompt, systemPrompt, 'application/json', quizSchema);
+  } else {
+    processChat(userPrompt, systemPrompt);
+  }
 };
-
-    const fileDescription = fileData.text.length > 1000 
-      ? fileData.text.substring(0, 1000) + '...' 
-      : fileData.text;
-
-    const systemPrompt = `Eres un tutor de estudio experto y didáctico. Analiza el material proporcionado y cumple con la solicitud de manera clara, estructurada y educativa.`;
-
-    const userPrompt = `Material de estudio:\n\n"${fileDescription}"\n\nTarea: ${promptInstruction}`;
-
-    if (optionType === 'Generar Examen') {
-      processChat(userPrompt, systemPrompt, 'application/json', quizSchema);
-    } else {
-      processChat(userPrompt, systemPrompt);
-    }
-  };
 
   const handleSendChat = (e) => {
     e.preventDefault();
